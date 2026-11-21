@@ -17,6 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { ROLES_ORDER, ROLE_META } from '../data/valorantFallback';
+import { getPlaybooksForMap } from '../data/proPlaybooks';
 import {
   getCompsForMapAndPlay,
   getMetaAgentSetForMap,
@@ -34,9 +35,11 @@ interface TeamSidebarProps {
   ourTeam: (string | null)[];
   enemyTeam: (string | null)[];
   pendingAgentPlace: { agentId: string; team: 'our' | 'enemy' } | null;
+  activeProPlaybookId: string | null;
   onPickOur: (slotIndex: number, agentId: string | null) => void;
   onPickEnemy: (slotIndex: number, agentId: string | null) => void;
   onApplyOurComp: (agentIds: string[], agentDuties?: Record<string, string>) => void;
+  onApplyProPlaybook: (playbookId: string) => void;
   onResetTeams: () => void;
   onRequestPlaceAgent: (agentId: string, team: 'our' | 'enemy') => void;
 }
@@ -295,9 +298,11 @@ export function TeamSidebar({
   ourTeam,
   enemyTeam,
   pendingAgentPlace,
+  activeProPlaybookId,
   onPickOur,
   onPickEnemy,
   onApplyOurComp,
+  onApplyProPlaybook,
   onResetTeams,
   onRequestPlaceAgent,
 }: TeamSidebarProps) {
@@ -314,6 +319,12 @@ export function TeamSidebar({
     [activeMap.id, side, activePlay]
   );
   const [compPickerOpen, setCompPickerOpen] = useState(false);
+  const [proPlaybookOpen, setProPlaybookOpen] = useState(false);
+
+  const proPlaybooks = useMemo(
+    () => getPlaybooksForMap(activeMap.id),
+    [activeMap.id]
+  );
 
   const totalCompOptions = mapComps.length + UNIVERSAL_STYLE_COMPS.length;
 
@@ -340,7 +351,28 @@ export function TeamSidebar({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setCompPickerOpen((prev) => !prev)}
+              onClick={() => {
+                setProPlaybookOpen((prev) => !prev);
+                setCompPickerOpen(false);
+              }}
+              aria-expanded={proPlaybookOpen}
+              className={`flex items-center gap-1 border px-2 py-1 text-[10px] font-semibold transition-colors whitespace-nowrap ${
+                proPlaybookOpen
+                  ? 'border-[#FBBF24] bg-[#FBBF24] text-[#0B0E14]'
+                  : 'border-[#FBBF24]/60 bg-[#FBBF24]/10 text-[#FDE68A] hover:bg-[#FBBF24]/25'
+              }`}
+            >
+              🏆 แผนทีมดัง (Pro Strats)
+              <ChevronDown
+                className={`h-3 w-3 transition-transform ${proPlaybookOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCompPickerOpen((prev) => !prev);
+                setProPlaybookOpen(false);
+              }}
               aria-expanded={compPickerOpen}
               className={`flex items-center gap-1 border px-2 py-1 text-[10px] font-semibold transition-colors whitespace-nowrap ${
                 compPickerOpen
@@ -363,6 +395,50 @@ export function TeamSidebar({
             </span>
           </div>
         </header>
+
+        {/* Pro Playbook Selector */}
+        {proPlaybookOpen && (
+          <div className="space-y-1.5 border border-[#FBBF24]/50 bg-[#0B0E14] p-2.5">
+            <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-[#FBBF24]">
+              <span>แผนทีมโปรระดับโลก · {activeMap.name}</span>
+              <span className="font-mono-tabular text-[#94A3B8]">{proPlaybooks.length} ทีม</span>
+            </div>
+            {proPlaybooks.map((pb) => {
+              const applied = activeProPlaybookId === pb.id;
+              return (
+                <button
+                  key={pb.id}
+                  type="button"
+                  onClick={() => {
+                    onApplyProPlaybook(pb.id);
+                    setProPlaybookOpen(false);
+                  }}
+                  className={`w-full border p-2 text-left transition-colors ${
+                    applied
+                      ? 'border-[#FBBF24] bg-[#FBBF24]/12'
+                      : 'border-[#263145] bg-[#171E2B] hover:border-[#FBBF24]'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-1.5">
+                    <span className="text-[11px] font-semibold text-[#F1F5F9]">{pb.teamName}</span>
+                    {applied && (
+                      <span className="shrink-0 text-[9px] font-bold text-[#FBBF24]">กำลังใช้</span>
+                    )}
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-1">
+                    {pb.agents.map((agId) => {
+                      const ag = agentById.get(agId);
+                      return ag ? <AgentAvatar key={agId} agent={ag} size="xs" /> : null;
+                    })}
+                  </div>
+                  <p className="mt-1 text-[10px] leading-snug text-[#94A3B8]">
+                    สไตล์: {pb.styleLabel}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Expandable Multi-Comp Preset Selector */}
         {compPickerOpen && (
