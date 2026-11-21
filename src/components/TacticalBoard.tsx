@@ -14,6 +14,7 @@ import {
   Plus,
   Radar,
   RotateCcw,
+  RotateCw,
   Route,
   Shield,
   Sparkles,
@@ -37,6 +38,7 @@ import {
   StrategyPlay,
   ValorantMap,
 } from '../types/tactix';
+import { ROTATION_TRANSITION, useMapOrientation } from '../hooks/useMapOrientation';
 
 interface TacticalBoardProps {
   maps: ValorantMap[];
@@ -130,6 +132,17 @@ export function TacticalBoard({
   const [panMode, setPanMode] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
   const [mapMenuOpen, setMapMenuOpen] = useState(false);
+  const {
+    rotation,
+    displayRotation,
+    rotationRef,
+    manualQuarterTurns,
+    rotateManually,
+    isSideways,
+    getCenterOffset,
+    counterRotateSvg,
+    counterRotateHtml,
+  } = useMapOrientation(activeMap.callouts, side, activeMap.id);
 
   // Route drawing state (multi-click waypoints)
   const [draftRoute, setDraftRoute] = useState<{ x: number; y: number }[]>([]);
@@ -217,8 +230,14 @@ export function TacticalBoard({
     const el = boardRef.current;
     if (!el) return { x: 50, y: 50 };
     const rect = el.getBoundingClientRect();
-    const x = ((clientX - rect.left) / rect.width) * 100;
-    const y = ((clientY - rect.top) / rect.height) * 100;
+    // Board is rotated in 90° steps, so its bounding box stays the same square.
+    const sx = (clientX - (rect.left + rect.width / 2)) / rect.width;
+    const sy = (clientY - (rect.top + rect.height / 2)) / rect.height;
+    const rad = (rotationRef.current * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const x = (sx * cos + sy * sin + 0.5) * 100;
+    const y = (-sx * sin + sy * cos + 0.5) * 100;
     return { x: clampCoord(x), y: clampCoord(y) };
   }, []);
 
@@ -501,15 +520,19 @@ export function TacticalBoard({
     const padMaxX = Math.min(100, maxX + 4);
     const padMinY = Math.max(0, minY - 3);
     const padMaxY = Math.min(100, maxY + 2);
-    const spanX = Math.max(20, padMaxX - padMinX);
-    const spanY = Math.max(20, padMaxY - padMinY);
+    const mapSpanX = Math.max(20, padMaxX - padMinX);
+    const mapSpanY = Math.max(20, padMaxY - padMinY);
+    const spanX = isSideways ? mapSpanY : mapSpanX;
+    const spanY = isSideways ? mapSpanX : mapSpanY;
     const centerX = Math.min(62, Math.max(38, (padMinX + padMaxX) / 2));
     const centerY = Math.min(62, Math.max(38, (padMinY + padMaxY) / 2));
     const fitX = stageSize.width / (squareSize * (spanX / 100));
     const fitY = stageSize.height / (squareSize * (spanY / 100));
     const autoScale = Math.min(1.65, Math.max(1.15, Math.min(fitX, fitY)));
     return { autoScale, centerX, centerY };
-  }, [activeMap.callouts, stageSize.width, stageSize.height, squareSize]);
+  }, [activeMap.callouts, stageSize.width, stageSize.height, squareSize, isSideways]);
+
+  const centerOffset = getCenterOffset(mapFit.centerX, mapFit.centerY);
 
   const effectiveScale = mapFit.autoScale * zoom;
 
@@ -869,6 +892,19 @@ export function TacticalBoard({
           >
             <ZoomIn className="h-3.5 w-3.5" />
           </button>
+          <button
+            type="button"
+            onClick={rotateManually}
+            title="หมุนแผนที่ 90° (สลับฝั่งเพื่อรีเซ็ตมุมอัตโนมัติ)"
+            aria-label="หมุนแผนที่ 90 องศา"
+            className={`border p-1 transition-colors ${
+              manualQuarterTurns !== 0
+                ? 'border-[#FF4655] bg-[#FF4655]/20 text-white'
+                : 'border-[#263145] bg-[#171E2B] text-[#94A3B8] hover:text-[#F1F5F9]'
+            }`}
+          >
+            <RotateCw className="h-3.5 w-3.5" />
+          </button>
 
           <div className="mx-1 h-4 w-px bg-[#263145]" />
 
@@ -1058,11 +1094,18 @@ export function TacticalBoard({
           style={{
             width: squareSize > 0 ? `${squareSize}px` : '100%',
             height: squareSize > 0 ? `${squareSize}px` : '100%',
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${effectiveScale}) translate(${(50 - mapFit.centerX).toFixed(2)}%, ${(50 - mapFit.centerY).toFixed(2)}%)`,
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${effectiveScale})`,
             transformOrigin: 'center center',
           }}
         >
-          <div className="relative h-full w-full">
+          <div
+            className="relative h-full w-full"
+            style={{
+              transform: `translate(${centerOffset.x.toFixed(2)}%, ${centerOffset.y.toFixed(2)}%) rotate(${displayRotation}deg)`,
+              transformOrigin: 'center center',
+              transition: `transform ${ROTATION_TRANSITION}`,
+            }}
+          >
             <div ref={boardRef} className="relative h-full w-full">
             {/* Base Minimap (Live Image or Fallback Schematic SVG) */}
             {useLiveMapImg ? (
@@ -1121,6 +1164,7 @@ export function TacticalBoard({
                       textAnchor="middle"
                       fill="#FF4655"
                       className="font-display text-[48px] font-bold"
+                      style={counterRotateSvg(s.x + s.w / 2, s.y + s.h / 2)}
                     >
                       {s.label}
                     </text>
@@ -1141,6 +1185,10 @@ export function TacticalBoard({
                   textAnchor="middle"
                   fill="#22D3EE"
                   className="font-display text-[12px] font-bold"
+                  style={counterRotateSvg(
+                    activeMap.fallbackGeometry.defenderSpawn.x + activeMap.fallbackGeometry.defenderSpawn.w / 2,
+                    activeMap.fallbackGeometry.defenderSpawn.y + 36
+                  )}
                 >
                   DEFENDER SPAWN
                 </text>
@@ -1158,6 +1206,10 @@ export function TacticalBoard({
                   textAnchor="middle"
                   fill="#FF4655"
                   className="font-display text-[12px] font-bold"
+                  style={counterRotateSvg(
+                    activeMap.fallbackGeometry.attackerSpawn.x + activeMap.fallbackGeometry.attackerSpawn.w / 2,
+                    activeMap.fallbackGeometry.attackerSpawn.y + 36
+                  )}
                 >
                   ATTACKER SPAWN
                 </text>
@@ -1192,6 +1244,7 @@ export function TacticalBoard({
                       paintOrder: 'stroke',
                       stroke: 'rgba(11, 14, 20, 0.9)',
                       strokeWidth: '0.8',
+                      ...counterRotateSvg(sl.x, sl.y),
                     }}
                   >
                     {sl.group}
@@ -1229,6 +1282,7 @@ export function TacticalBoard({
                             stroke: 'rgba(11, 14, 20, 0.94)',
                             strokeWidth: '0.55',
                             strokeLinejoin: 'round',
+                            ...counterRotateSvg(c.x, c.y),
                           }}
                         >
                           {c.key}
@@ -1367,6 +1421,7 @@ export function TacticalBoard({
                         fill="#FFFFFF"
                         fontSize="2.4"
                         className="pointer-events-none font-display font-bold"
+                        style={counterRotateSvg(m.x, m.y)}
                       >
                         {smokeNumber}
                       </text>
@@ -1395,7 +1450,7 @@ export function TacticalBoard({
                         setSelectedMarkerId(m.id);
                         setPinLabelDraft(m.label ?? ag.name);
                       }}
-                      style={{ left: `${m.x}%`, top: `${m.y}%` }}
+                      style={{ left: `${m.x}%`, top: `${m.y}%`, ...counterRotateHtml }}
                       className="absolute -translate-x-1/2 -translate-y-1/2 cursor-move"
                       title={`${ag.name} (${m.team === 'enemy' ? 'ศัตรู' : 'ทีมเรา'})`}
                     >
@@ -1447,7 +1502,7 @@ export function TacticalBoard({
                       setSelectedMarkerId(m.id);
                       setPinLabelDraft(m.label ?? '');
                     }}
-                    style={{ left: `${m.x}%`, top: `${m.y}%` }}
+                    style={{ left: `${m.x}%`, top: `${m.y}%`, ...counterRotateHtml }}
                     className="absolute -translate-x-1/2 -translate-y-1/2 cursor-move flex flex-col items-center"
                   >
                     <div
@@ -1470,9 +1525,22 @@ export function TacticalBoard({
         </div>
 
         {/* Non-overlapping Outer Stage HUDs */}
-        <div className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1 border border-[#263145] bg-[#0B0E14]/85 px-2 py-0.5 font-mono-tabular text-[10px] text-[#94A3B8]">
-          <Compass className="h-3 w-3 text-[#FF4655]" />
-          N
+        <div
+          className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1.5 border border-[#263145] bg-[#0B0E14]/85 px-2 py-1 font-mono-tabular text-[10px] text-[#94A3B8]"
+          aria-label={`ทิศเหนือของแผนที่หมุน ${rotation} องศา`}
+        >
+          <div
+            className="relative flex h-5 w-5 items-center justify-center rounded-full border border-[#263145]"
+            style={{ transform: `rotate(${displayRotation}deg)`, transition: `transform ${ROTATION_TRANSITION}` }}
+          >
+            <Compass className="h-3 w-3 text-[#94A3B8]" />
+            <span
+              className="absolute -top-0.5 left-1/2 h-1.5 w-1 -translate-x-1/2 bg-[#FF4655]"
+              aria-hidden="true"
+            />
+          </div>
+          <span className="text-[#F1F5F9]">N</span>
+          <span>{rotation > 0 ? `+${rotation}` : rotation}°</span>
         </div>
 
         {cursorPt && (
