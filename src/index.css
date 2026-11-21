@@ -1,0 +1,104 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Anuphan", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Chakra Petch", "Anuphan", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-canvas: #0B0E14;
+  --color-panel: #111620;
+  --color-raised: #171E2B;
+  --color-elevated: #1E2738;
+  --color-line: #263145;
+
+  --color-attack: #FF4655;
+  --color-defense: #22D3EE;
+  --color-smoke: #A855F7;
+  --color-route: #34D399;
+  --color-flash: #FBBF24;
+  --color-molly: #FB7185;
+  --color-wall: #38BDF8;
+
+  --color-role-duelist: #FB923C;
+  --color-role-initiator: #FACC15;
+  --color-role-controller: #60A5FA;
+  --color-role-sentinel: #34D399;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: #0B0E14;
+    color: #F1F5F9;
+    font-family: var(--font-sans);
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.bg-tactical-grid {
+  background-color: #0B0E14;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.clip-angle-sm {
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+}
+
+.clip-angle-md {
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes route-dash {
+  to {
+    stroke-dashoffset: -6.4;
+  }
+}
+
+.animate-route-dash {
+  animation: route-dash 1.2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-route-dash {
+    animation: none;
+  }
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.22);
+  border-radius: 3px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}

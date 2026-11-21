@@ -1,0 +1,8 @@
+{
+  "name": "TACTIX — Valorant Strategy Planner",
+  "description": "วางแผนกลยุทธ์ Valorant แบบครบวงจร: กระดานแผนที่อินเทอร์แอกทีฟ วาดเส้นทาง วางจุด Smoke/Utility จัดทีม 5v5 วิเคราะห์สกิล และบันทึกคลังแผนการเล่น",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
