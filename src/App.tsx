@@ -4,6 +4,7 @@ import { ExportModal } from './components/ExportModal';
 import { Header } from './components/Header';
 import { LiveMatchState, LiveMatchView } from './components/LiveMatchView';
 import { MyProgressView } from './components/MyProgressView';
+import { CrosshairsView } from './components/CrosshairsView';
 import { ProTrainingView } from './components/ProTrainingView';
 import { StrategyPanel } from './components/StrategyPanel';
 import { TacticalBoard } from './components/TacticalBoard';
@@ -610,6 +611,12 @@ export default function App() {
       {activeView === 'progress' && (
         <div className="min-h-0 flex-1 overflow-hidden">
           <MyProgressView />
+        </div>
+      )}
+
+      {activeView === 'crosshairs' && (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <CrosshairsView />
         </div>
       )}
 
