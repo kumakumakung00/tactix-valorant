@@ -1,21 +1,27 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  BookOpen,
   CalendarCheck,
   CheckSquare,
+  Crosshair as CrosshairIcon,
   Flame,
   Pause,
   Play,
   Plus,
   RotateCcw,
+  Shield,
   Shuffle,
   Square,
   Timer,
   Trash2,
   TrendingUp,
   X,
+  Zap,
 } from 'lucide-react';
 import { DAILY_TRAINING_MISSIONS } from '../data/proTrainingData';
+import { ROLE_MASTERY_GUIDES, getRoleMasteryGuide } from '../data/roleMastery';
 import {
+  AgentRole,
   CustomWarmupItem,
   MyProgressPersistedState,
   WarmupProgramId,
@@ -124,6 +130,13 @@ const INITIAL_PROGRESS_STATE: MyProgressPersistedState = {
   dailyMission: DAILY_TRAINING_MISSIONS[0],
   dailyMissionDone: false,
   logs: [],
+  roleMasteryRole: 'duelist' as AgentRole,
+  roleMasteryChecks: {
+    duelist: {},
+    initiator: {},
+    controller: {},
+    sentinel: {},
+  },
 };
 
 function getLocalDateKey(date: Date = new Date()): string {
@@ -219,6 +232,18 @@ export function MyProgressView() {
             ? [...storedDates, todayKey]
             : storedDates;
 
+        const roleChecks = (parsed.roleMasteryChecks ?? {}) as Partial<
+          Record<AgentRole, Record<string, boolean>>
+        >;
+        const roleMasteryRole: AgentRole = [
+          'duelist',
+          'initiator',
+          'controller',
+          'sentinel',
+        ].includes(parsed.roleMasteryRole as AgentRole)
+          ? (parsed.roleMasteryRole as AgentRole)
+          : 'duelist';
+
         return {
           warmupProgramId,
           warmupChecksByProgram,
@@ -232,6 +257,13 @@ export function MyProgressView() {
               : DAILY_TRAINING_MISSIONS[0],
           dailyMissionDone: !!parsed.dailyMissionDone,
           logs: Array.isArray(parsed.logs) ? parsed.logs : [],
+          roleMasteryRole,
+          roleMasteryChecks: {
+            duelist: roleChecks.duelist ?? {},
+            initiator: roleChecks.initiator ?? {},
+            controller: roleChecks.controller ?? {},
+            sentinel: roleChecks.sentinel ?? {},
+          },
         };
       }
     } catch {
@@ -437,6 +469,46 @@ export function MyProgressView() {
       dailyMission: picked,
       dailyMissionDone: false,
     }));
+  };
+
+  const activeRoleGuide = getRoleMasteryGuide(progress.roleMasteryRole ?? 'duelist');
+  const activeRoleChecks = useMemo(
+    () => progress.roleMasteryChecks?.[activeRoleGuide.role] ?? {},
+    [progress.roleMasteryChecks, activeRoleGuide.role]
+  );
+  const roleDoneCount = activeRoleGuide.skills.filter((s) => !!activeRoleChecks[s.id]).length;
+
+  const ROLE_ICON_MAP = {
+    duelist: { Icon: Zap, color: 'text-[#FF4655]', active: 'border-[#FF4655] bg-[#FF4655]/15 text-[#F1F5F9]' },
+    initiator: { Icon: CrosshairIcon, color: 'text-[#FBBF24]', active: 'border-[#FBBF24] bg-[#FBBF24]/15 text-[#F1F5F9]' },
+    controller: { Icon: BookOpen, color: 'text-[#22D3EE]', active: 'border-[#22D3EE] bg-[#22D3EE]/15 text-[#F1F5F9]' },
+    sentinel: { Icon: Shield, color: 'text-[#34D399]', active: 'border-[#34D399] bg-[#34D399]/15 text-[#F1F5F9]' },
+  } as const;
+
+  const handleSelectMasteryRole = (role: AgentRole) => {
+    setProgress((prev) => ({ ...prev, roleMasteryRole: role }));
+  };
+
+  const toggleRoleSkill = (skillId: string) => {
+    setProgress((prev) => {
+      const current = prev.roleMasteryChecks ?? {
+        duelist: {},
+        initiator: {},
+        controller: {},
+        sentinel: {},
+      };
+      const roleChecks = current[activeRoleGuide.role] ?? {};
+      return {
+        ...prev,
+        roleMasteryChecks: {
+          ...current,
+          [activeRoleGuide.role]: {
+            ...roleChecks,
+            [skillId]: !roleChecks[skillId],
+          },
+        },
+      };
+    });
   };
 
   return (
@@ -837,6 +909,156 @@ export function MyProgressView() {
           </div>
         </section>
       </div>
+
+      {/* PART 3: คู่มือพัฒนาทักษะตามตำแหน่ง (Role Mastery Guide) */}
+      <section
+        aria-label="คู่มือพัฒนาทักษะตามตำแหน่ง"
+        className="mx-auto mb-6 w-full max-w-6xl border border-[#263145] bg-[#111620] px-6 pb-6 pt-5"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#263145] pb-3">
+          <div className="flex items-center gap-2">
+            <span className="flex h-6 w-6 items-center justify-center bg-[#FBBF24] font-mono-tabular text-xs font-bold text-[#0B0E14]">
+              3
+            </span>
+            <h2 className="font-display text-lg font-bold tracking-wide text-[#F1F5F9]">
+              คู่มือพัฒนาทักษะตามตำแหน่ง
+            </h2>
+          </div>
+          <span className="text-xs text-[#94A3B8]">
+            เลือกตำแหน่งของคุณเพื่อดูแนวทางฝึกซ้อมและเช็กลิสต์พัฒนาตัวเอง
+          </span>
+        </div>
+
+        {/* Role Selector Buttons */}
+        <div
+          className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4"
+          role="group"
+          aria-label="เลือกตำแหน่ง"
+        >
+          {ROLE_MASTERY_GUIDES.map((g) => {
+            const cfg = ROLE_ICON_MAP[g.role];
+            const Icon = cfg.Icon;
+            const isSelected = activeRoleGuide.role === g.role;
+            const doneCount = g.skills.filter(
+              (s) => !!(progress.roleMasteryChecks?.[g.role]?.[s.id])
+            ).length;
+            return (
+              <button
+                key={g.role}
+                type="button"
+                aria-pressed={isSelected}
+                onClick={() => handleSelectMasteryRole(g.role)}
+                className={`flex items-center gap-2.5 border px-3 py-2.5 text-left transition-colors ${
+                  isSelected
+                    ? cfg.active
+                    : 'border-[#263145] bg-[#0B0E14]/80 text-[#94A3B8] hover:border-[#475569] hover:text-[#F1F5F9]'
+                }`}
+              >
+                <Icon className={`h-5 w-5 shrink-0 ${isSelected ? cfg.color : ''}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-bold">{g.title}</span>
+                  <span className="block font-mono-tabular text-[10px] text-[#94A3B8]">
+                    ฝึกแล้ว {doneCount}/{g.skills.length} ทักษะ
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Guide Card */}
+        <div className="mt-4 flex flex-col gap-4">
+          <div className="border border-[#263145] bg-[#0B0E14]/70 px-4 py-3">
+            <h3 className="font-display text-base font-bold text-[#F1F5F9]">
+              {activeRoleGuide.title}
+            </h3>
+            <p className="mt-0.5 text-xs text-[#94A3B8]">{activeRoleGuide.tagline}</p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* 1. Core Mindset */}
+            <div className="border border-[#263145] bg-[#171E2B] p-4">
+              <h4 className="flex items-center gap-1.5 font-display text-xs font-bold uppercase tracking-wider text-[#22D3EE]">
+                <Zap className="h-3.5 w-3.5" />
+                หัวใจหลักของตำแหน่ง (Core Mindset)
+              </h4>
+              <ul className="mt-2.5 space-y-2">
+                {activeRoleGuide.coreMindset.map((m, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs leading-relaxed text-[#E2E8F0]">
+                    <span className="mt-0.5 h-1.5 w-1.5 shrink-0 bg-[#22D3EE]" />
+                    <span>{m}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* 3. Common Mistakes */}
+            <div className="border border-[#263145] bg-[#171E2B] p-4">
+              <h4 className="flex items-center gap-1.5 font-display text-xs font-bold uppercase tracking-wider text-[#FF4655]">
+                <X className="h-3.5 w-3.5" />
+                ข้อผิดพลาดที่ควรเลี่ยง (Common Mistakes)
+              </h4>
+              <ul className="mt-2.5 space-y-2">
+                {activeRoleGuide.mistakes.map((m, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs leading-relaxed text-[#E2E8F0]">
+                    <span className="mt-0.5 h-1.5 w-1.5 shrink-0 bg-[#FF4655]" />
+                    <span>{m}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          {/* 2. Key Skills Checklist */}
+          <div className="border border-[#263145] bg-[#171E2B] p-4">
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="flex items-center gap-1.5 font-display text-xs font-bold uppercase tracking-wider text-[#34D399]">
+                <CheckSquare className="h-3.5 w-3.5" />
+                ทักษะที่ต้องฝึกซ้อม (Key Skills to Practice)
+              </h4>
+              <span className="font-mono-tabular text-[11px] font-semibold text-[#34D399]">
+                {roleDoneCount}/{activeRoleGuide.skills.length} ทักษะ
+              </span>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+              {activeRoleGuide.skills.map((skill) => {
+                const checked = !!activeRoleChecks[skill.id];
+                return (
+                  <button
+                    key={skill.id}
+                    type="button"
+                    aria-pressed={checked}
+                    onClick={() => toggleRoleSkill(skill.id)}
+                    className={`flex items-start gap-2.5 border p-3 text-left transition-colors ${
+                      checked
+                        ? 'border-[#34D399]/50 bg-[#0B0E14]/70'
+                        : 'border-[#263145] bg-[#0B0E14]/70 hover:border-[#475569]'
+                    }`}
+                  >
+                    {checked ? (
+                      <CheckSquare className="mt-0.5 h-4.5 w-4.5 shrink-0 text-[#34D399]" />
+                    ) : (
+                      <Square className="mt-0.5 h-4.5 w-4.5 shrink-0 text-[#64748B]" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={`block text-xs font-semibold leading-snug ${
+                          checked ? 'text-[#94A3B8] line-through' : 'text-[#F1F5F9]'
+                        }`}
+                      >
+                        {skill.label}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-relaxed text-[#94A3B8]">
+                        {skill.hint}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

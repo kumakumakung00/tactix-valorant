@@ -231,4 +231,6 @@ export interface MyProgressPersistedState {
   dailyMission: string;
   dailyMissionDone: boolean;
   logs: MatchProgressLog[];
+  roleMasteryRole?: AgentRole;
+  roleMasteryChecks?: Record<AgentRole, Record<string, boolean>>;
 }
