@@ -13,6 +13,7 @@ import {
   Plus,
   Radar,
   RotateCcw,
+  RotateCw,
   Search,
   Shield,
   Sparkles,
@@ -38,6 +39,7 @@ import {
   getProblemsForSide,
 } from '../utils/liveMatchEngine';
 import { AgentAvatar } from './AgentAvatar';
+import { ROTATION_TRANSITION, useMapOrientation } from '../hooks/useMapOrientation';
 
 export interface LiveMatchState {
   mapId: string;
@@ -97,6 +99,17 @@ export function LiveMatchView({
     () => maps.find((m) => m.id === matchState.mapId) ?? maps[0],
     [maps, matchState.mapId]
   );
+
+  const {
+    rotation,
+    displayRotation,
+    manualQuarterTurns,
+    rotateManually,
+    isSideways,
+    getCenterOffset,
+    counterRotateSvg,
+    counterRotateHtml,
+  } = useMapOrientation(activeMap.callouts, matchState.side, activeMap.id);
 
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const standardMaps = useMemo(() => maps.filter((m) => m.category !== 'tdm'), [maps]);
@@ -196,15 +209,19 @@ export function LiveMatchView({
       if (c.y < minY) minY = c.y;
       if (c.y > maxY) maxY = c.y;
     }
-    const spanX = Math.max(24, Math.min(100, maxX + 4) - Math.max(0, minX - 4));
-    const spanY = Math.max(24, Math.min(100, maxY + 3) - Math.max(0, minY - 4));
+    const mapSpanX = Math.max(24, Math.min(100, maxX + 4) - Math.max(0, minX - 4));
+    const mapSpanY = Math.max(24, Math.min(100, maxY + 3) - Math.max(0, minY - 4));
+    const spanX = isSideways ? mapSpanY : mapSpanX;
+    const spanY = isSideways ? mapSpanX : mapSpanY;
     const centerX = Math.min(62, Math.max(38, (minX + maxX) / 2));
     const centerY = Math.min(62, Math.max(38, (minY + maxY) / 2));
     const fitX = stageSize.width / (squareSize * (spanX / 100));
     const fitY = stageSize.height / (squareSize * (spanY / 100));
     const autoScale = Math.min(1.5, Math.max(1.06, Math.min(fitX, fitY)));
     return { autoScale, centerX, centerY };
-  }, [activeMap.callouts, stageSize.width, stageSize.height, squareSize]);
+  }, [activeMap.callouts, stageSize.width, stageSize.height, squareSize, isSideways]);
+
+  const centerOffset = getCenterOffset(mapFit.centerX, mapFit.centerY);
 
   const useLiveMapImg = !!activeMap.displayIcon && !imgFailed;
   const siteLabels = useMemo(
@@ -701,11 +718,18 @@ export function LiveMatchView({
                 style={{
                   width: squareSize > 0 ? `${squareSize}px` : '100%',
                   height: squareSize > 0 ? `${squareSize}px` : '100%',
-                  transform: `scale(${mapFit.autoScale}) translate(${(50 - mapFit.centerX).toFixed(2)}%, ${(50 - mapFit.centerY).toFixed(2)}%)`,
+                  transform: `scale(${mapFit.autoScale})`,
                   transformOrigin: 'center center',
                 }}
               >
-                <div className="relative h-full w-full">
+                <div
+                  className="relative h-full w-full"
+                  style={{
+                    transform: `translate(${centerOffset.x.toFixed(2)}%, ${centerOffset.y.toFixed(2)}%) rotate(${displayRotation}deg)`,
+                    transformOrigin: 'center center',
+                    transition: `transform ${ROTATION_TRANSITION}`,
+                  }}
+                >
                   {useLiveMapImg ? (
                     <img
                       src={activeMap.displayIcon}
@@ -750,6 +774,7 @@ export function LiveMatchView({
                             textAnchor="middle"
                             fill="#FF4655"
                             className="font-display text-[48px] font-bold"
+                            style={counterRotateSvg(s.x + s.w / 2, s.y + s.h / 2)}
                           >
                             {s.label}
                           </text>
@@ -782,6 +807,7 @@ export function LiveMatchView({
                             paintOrder: 'stroke',
                             stroke: 'rgba(11, 14, 20, 0.9)',
                             strokeWidth: '0.8',
+                            ...counterRotateSvg(sl.x, sl.y),
                           }}
                         >
                           {sl.group}
@@ -817,6 +843,7 @@ export function LiveMatchView({
                                 stroke: 'rgba(11, 14, 20, 0.94)',
                                 strokeWidth: '0.55',
                                 strokeLinejoin: 'round',
+                                ...counterRotateSvg(c.x, c.y),
                               }}
                             >
                               {c.key}
@@ -885,6 +912,7 @@ export function LiveMatchView({
                               fill="#FFFFFF"
                               fontSize="2.4"
                               className="font-display font-bold"
+                              style={counterRotateSvg(m.x, m.y)}
                             >
                               {smokeNumber}
                             </text>
@@ -930,7 +958,7 @@ export function LiveMatchView({
                         return (
                           <div
                             key={m.id}
-                            style={{ left: `${m.x}%`, top: `${m.y}%` }}
+                            style={{ left: `${m.x}%`, top: `${m.y}%`, ...counterRotateHtml }}
                             className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center"
                           >
                             <div
@@ -977,7 +1005,7 @@ export function LiveMatchView({
                       return (
                         <div
                           key={m.id}
-                          style={{ left: `${m.x}%`, top: `${m.y}%` }}
+                          style={{ left: `${m.x}%`, top: `${m.y}%`, ...counterRotateHtml }}
                           className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center"
                         >
                           <div
@@ -996,9 +1024,41 @@ export function LiveMatchView({
                 </div>
               </div>
 
-              <div className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1 border border-[#263145] bg-[#0B0E14]/85 px-2 py-0.5 font-mono-tabular text-[10px] text-[#94A3B8]">
-                <Compass className="h-3 w-3 text-[#FF4655]" />
-                N
+              <div className="absolute right-2 top-2 z-20 flex items-center gap-1.5">
+                <div
+                  className="pointer-events-none flex items-center gap-1.5 border border-[#263145] bg-[#0B0E14]/85 px-2 py-1 font-mono-tabular text-[10px] text-[#94A3B8]"
+                  aria-label={`ทิศเหนือของแผนที่หมุน ${rotation} องศา`}
+                >
+                  <div
+                    className="relative flex h-5 w-5 items-center justify-center rounded-full border border-[#263145]"
+                    style={{
+                      transform: `rotate(${displayRotation}deg)`,
+                      transition: `transform ${ROTATION_TRANSITION}`,
+                    }}
+                  >
+                    <Compass className="h-3 w-3 text-[#94A3B8]" />
+                    <span
+                      className="absolute -top-0.5 left-1/2 h-1.5 w-1 -translate-x-1/2 bg-[#FF4655]"
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <span className="text-[#F1F5F9]">N</span>
+                  <span>{rotation > 0 ? `+${rotation}` : rotation}°</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={rotateManually}
+                  title="หมุนแผนที่ 90° (สลับฝั่งเพื่อรีเซ็ตมุมอัตโนมัติ)"
+                  aria-label="หมุนแผนที่ 90 องศา"
+                  className={`flex items-center gap-1 border px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF4655] ${
+                    manualQuarterTurns !== 0
+                      ? 'border-[#FF4655] bg-[#FF4655]/20 text-white'
+                      : 'border-[#263145] bg-[#0B0E14]/85 text-[#CBD5E1] hover:border-[#475569] hover:text-white'
+                  }`}
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                  90°
+                </button>
               </div>
             </div>
           </div>

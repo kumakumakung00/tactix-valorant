@@ -38,6 +38,7 @@ import {
   StrategyPlay,
   ValorantMap,
 } from '../types/tactix';
+import { ROTATION_TRANSITION, useMapOrientation } from '../hooks/useMapOrientation';
 
 interface TacticalBoardProps {
   maps: ValorantMap[];
@@ -94,24 +95,6 @@ function clampCoord(v: number): number {
   return Math.min(98, Math.max(2, Number(v.toFixed(1))));
 }
 
-const ROTATION_TRANSITION = '500ms cubic-bezier(0.22, 1, 0.36, 1)';
-
-function normalizeAngle(deg: number): number {
-  return ((((deg + 180) % 360) + 360) % 360) - 180;
-}
-
-/** Snapped rotation (multiple of 90°) that puts the selected side's spawn at the bottom of the screen. */
-function getAutoRotation(callouts: MapCallout[], side: Side): number {
-  const atkSpawn = callouts.find((c) => c.group === 'Atk' && c.name === 'Spawn');
-  const defSpawn = callouts.find((c) => c.group === 'Def' && c.name === 'Spawn');
-  const target = side === 'attack' ? atkSpawn : defSpawn;
-  const opposite = side === 'attack' ? defSpawn : atkSpawn;
-  if (!target) return side === 'attack' ? -90 : 90;
-  const from = opposite ?? { x: 50, y: 50 };
-  const theta = (Math.atan2(target.y - from.y, target.x - from.x) * 180) / Math.PI;
-  return normalizeAngle(Math.round((90 - theta) / 90) * 90);
-}
-
 function uid(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -149,26 +132,17 @@ export function TacticalBoard({
   const [panMode, setPanMode] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
   const [mapMenuOpen, setMapMenuOpen] = useState(false);
-  const [manualQuarterTurns, setManualQuarterTurns] = useState(0);
-
-  const autoRotation = useMemo(
-    () => getAutoRotation(activeMap.callouts, side),
-    [activeMap.callouts, side]
-  );
-  const rotation = normalizeAngle(autoRotation + manualQuarterTurns * 90);
-
-  // Continuous angle for CSS so transitions always take the shortest path.
-  const [displayRotation, setDisplayRotation] = useState(rotation);
-  useEffect(() => {
-    setDisplayRotation((prev) => prev + normalizeAngle(rotation - prev));
-  }, [rotation]);
-
-  const rotationRef = useRef(rotation);
-  rotationRef.current = rotation;
-
-  useEffect(() => {
-    setManualQuarterTurns(0);
-  }, [side, activeMap.id]);
+  const {
+    rotation,
+    displayRotation,
+    rotationRef,
+    manualQuarterTurns,
+    rotateManually,
+    isSideways,
+    getCenterOffset,
+    counterRotateSvg,
+    counterRotateHtml,
+  } = useMapOrientation(activeMap.callouts, side, activeMap.id);
 
   // Route drawing state (multi-click waypoints)
   const [draftRoute, setDraftRoute] = useState<{ x: number; y: number }[]>([]);
@@ -546,7 +520,6 @@ export function TacticalBoard({
     const padMaxX = Math.min(100, maxX + 4);
     const padMinY = Math.max(0, minY - 3);
     const padMaxY = Math.min(100, maxY + 2);
-    const isSideways = Math.abs(rotation) % 180 === 90;
     const mapSpanX = Math.max(20, padMaxX - padMinX);
     const mapSpanY = Math.max(20, padMaxY - padMinY);
     const spanX = isSideways ? mapSpanY : mapSpanX;
@@ -557,25 +530,9 @@ export function TacticalBoard({
     const fitY = stageSize.height / (squareSize * (spanY / 100));
     const autoScale = Math.min(1.65, Math.max(1.15, Math.min(fitX, fitY)));
     return { autoScale, centerX, centerY };
-  }, [activeMap.callouts, stageSize.width, stageSize.height, squareSize, rotation]);
+  }, [activeMap.callouts, stageSize.width, stageSize.height, squareSize, isSideways]);
 
-  // Rotate the fit-center offset so the focused area stays centered after rotating the board.
-  const centerOffset = useMemo(() => {
-    const rad = (rotation * Math.PI) / 180;
-    const dx = mapFit.centerX - 50;
-    const dy = mapFit.centerY - 50;
-    return {
-      x: -(dx * Math.cos(rad) - dy * Math.sin(rad)),
-      y: -(dx * Math.sin(rad) + dy * Math.cos(rad)),
-    };
-  }, [mapFit.centerX, mapFit.centerY, rotation]);
-
-  const counterRotateSvg = (x: number, y: number): React.CSSProperties => ({
-    transform: `rotate(${-displayRotation}deg)`,
-    transformOrigin: `${x}px ${y}px`,
-    transformBox: 'view-box',
-    transition: `transform ${ROTATION_TRANSITION}`,
-  });
+  const centerOffset = getCenterOffset(mapFit.centerX, mapFit.centerY);
 
   const effectiveScale = mapFit.autoScale * zoom;
 
@@ -937,7 +894,7 @@ export function TacticalBoard({
           </button>
           <button
             type="button"
-            onClick={() => setManualQuarterTurns((t) => (t + 1) % 4)}
+            onClick={rotateManually}
             title="หมุนแผนที่ 90° (สลับฝั่งเพื่อรีเซ็ตมุมอัตโนมัติ)"
             aria-label="หมุนแผนที่ 90 องศา"
             className={`border p-1 transition-colors ${
@@ -1493,12 +1450,7 @@ export function TacticalBoard({
                         setSelectedMarkerId(m.id);
                         setPinLabelDraft(m.label ?? ag.name);
                       }}
-                      style={{
-                        left: `${m.x}%`,
-                        top: `${m.y}%`,
-                        rotate: `${-displayRotation}deg`,
-                        transition: `rotate ${ROTATION_TRANSITION}`,
-                      }}
+                      style={{ left: `${m.x}%`, top: `${m.y}%`, ...counterRotateHtml }}
                       className="absolute -translate-x-1/2 -translate-y-1/2 cursor-move"
                       title={`${ag.name} (${m.team === 'enemy' ? 'ศัตรู' : 'ทีมเรา'})`}
                     >
@@ -1550,12 +1502,7 @@ export function TacticalBoard({
                       setSelectedMarkerId(m.id);
                       setPinLabelDraft(m.label ?? '');
                     }}
-                    style={{
-                      left: `${m.x}%`,
-                      top: `${m.y}%`,
-                      rotate: `${-displayRotation}deg`,
-                      transition: `rotate ${ROTATION_TRANSITION}`,
-                    }}
+                    style={{ left: `${m.x}%`, top: `${m.y}%`, ...counterRotateHtml }}
                     className="absolute -translate-x-1/2 -translate-y-1/2 cursor-move flex flex-col items-center"
                   >
                     <div
