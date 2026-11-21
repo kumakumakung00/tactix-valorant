@@ -39,6 +39,7 @@ const INITIAL_LIVE_MATCH = (): LiveMatchState => ({
   ourTeam: EMPTY_TEAM(),
   enemyTeam: EMPTY_TEAM(),
   problemId: null,
+  variation: 1,
 });
 
 const INITIAL_PERSISTED: TactixPersistedState = {

@@ -7,6 +7,7 @@ import {
   Coins,
   Compass,
   Crosshair,
+  Dices,
   Eye,
   Flame,
   MapPin,
@@ -23,17 +24,11 @@ import {
   X,
 } from 'lucide-react';
 import { ROLES_ORDER, ROLE_META } from '../data/valorantFallback';
-import {
-  Agent,
-  AgentRole,
-  BoardMarker,
-  LiveMatchEconomy,
-  LiveMatchProblemId,
-  Side,
-  ValorantMap,
-} from '../types/tactix';
+import { Agent, AgentRole, BoardMarker } from '../types/tactix';
+import { LiveMatchEconomy, LiveMatchProblemId, Side, ValorantMap } from '../types/tactix';
 import {
   LIVE_MATCH_ECONOMIES,
+  LIVE_MATCH_VARIATIONS,
   buildEnemyCounterWarnings,
   buildLiveMatchCounterPlay,
   getProblemsForSide,
@@ -48,6 +43,7 @@ export interface LiveMatchState {
   ourTeam: (string | null)[];
   enemyTeam: (string | null)[];
   problemId: LiveMatchProblemId | null;
+  variation: 1 | 2 | 3;
 }
 
 interface LiveMatchViewProps {
@@ -153,20 +149,27 @@ export function LiveMatchView({
     if (!matchState.problemId) return null;
     const belongsToSide = sideProblems.some((p) => p.id === matchState.problemId);
     if (!belongsToSide) return null;
+    const agentNames = matchState.ourTeam.map((id) =>
+      id ? (agentById.get(id)?.name ?? null) : null
+    );
     return buildLiveMatchCounterPlay({
       map: activeMap,
       side: matchState.side,
       economy: matchState.economy,
       problemId: matchState.problemId,
       ourTeam: matchState.ourTeam,
+      variation: matchState.variation,
+      agentNames: agentNames as string[],
     });
   }, [
     matchState.problemId,
     matchState.side,
     matchState.economy,
     matchState.ourTeam,
+    matchState.variation,
     activeMap,
     sideProblems,
+    agentById,
   ]);
 
   const activeEconomyMeta = useMemo(
@@ -1098,6 +1101,9 @@ export function LiveMatchView({
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="text-xs font-bold leading-snug text-[#F1F5F9]">
+                            {cmd.actor && (
+                              <span className="text-[#FBBF24]">{cmd.actor}: </span>
+                            )}
                             {cmd.head}
                           </div>
                           <div className="mt-0.5 text-[11px] leading-relaxed text-[#CBD5E1]">

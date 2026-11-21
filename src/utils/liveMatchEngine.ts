@@ -137,21 +137,119 @@ export function getProblemsForSide(side: Side): LiveMatchProblemMeta[] {
   return LIVE_MATCH_PROBLEMS.filter((p) => p.side === side);
 }
 
+export interface LiveMatchCommand {
+  head: string;
+  detail: string;
+  actor?: string;
+}
+
 export interface LiveMatchCounterOutput {
   problem: LiveMatchProblemMeta;
   headline: string;
-  commands: [
-    { head: string; detail: string },
-    { head: string; detail: string },
-    { head: string; detail: string },
-  ];
+  commands: LiveMatchCommand[];
+  variation?: 1 | 2 | 3;
   elements: BoardElements;
 }
+
+export interface LiveMatchVariationMeta {
+  id: 1 | 2 | 3;
+  label: string;
+  theme: string;
+}
+
+export const LIVE_MATCH_VARIATIONS: LiveMatchVariationMeta[] = [
+  {
+    id: 1,
+    label: 'แบบที่ 1 · ตั้งรับซ้อนกัน',
+    theme: 'รวมกลุ่มซ้อนกันที่จุดเดียว เล่น Crossfire รุมยิงพร้อมกัน',
+  },
+  {
+    id: 2,
+    label: 'แบบที่ 2 · ดันชิงพื้นที่ต้นรอบ',
+    theme: 'ดันหน้าเร็วต้นรอบ ชิงพื้นที่กลางและทางเข้าไซท์ก่อนศัตรูตั้งตัว',
+  },
+  {
+    id: 3,
+    label: 'แบบที่ 3 · หลอกล่อสลับไซท์',
+    theme: 'แยกกำลังหลอกสองฝั่ง ล่อให้ศัตรูหมุนแล้วสลับไปเจาะอีกไซท์',
+  },
+];
 
 interface Pt {
   x: number;
   y: number;
   label?: string;
+}
+
+interface TransformSpec {
+  foci: Pt[];
+  markerT: number;
+  strokeT: number;
+}
+
+function getVariationTransform(variation: 1 | 2 | 3, side: Side, a: MapAnchors): TransformSpec {
+  if (variation === 1) {
+    return side === 'attack'
+      ? { foci: [a.bLobby, a.bMain, a.siteB], markerT: 0.6, strokeT: 0.45 }
+      : { foci: [a.aBack, a.siteA, a.aLink], markerT: 0.6, strokeT: 0.45 };
+  }
+  if (variation === 2) {
+    return side === 'attack'
+      ? { foci: [a.mid, a.aMain, a.bMain], markerT: 0.5, strokeT: 0.4 }
+      : { foci: [a.aMain, a.bMain, a.mid], markerT: 0.5, strokeT: 0.4 };
+  }
+  return side === 'attack'
+    ? { foci: [a.aLobby, a.bLobby], markerT: 0.45, strokeT: 0.35 }
+    : { foci: [a.siteA, a.siteB], markerT: 0.45, strokeT: 0.35 };
+}
+
+function getEconomyTransform(economy: LiveMatchEconomy, side: Side, a: MapAnchors): TransformSpec | null {
+  switch (economy) {
+    case 'eco':
+      // รวมกลุ่มซุ่มมุมแคบ / บุกทางแคบทางเดียว
+      return { foci: [a.mid, a.aMain, a.bMain], markerT: 0.38, strokeT: 0.3 };
+    case 'bonus':
+      // หลบมุมยิงระยะไกล (Off-angle)
+      return side === 'attack'
+        ? { foci: [a.aMain, a.bMain], markerT: 0.3, strokeT: 0.25 }
+        : { foci: [a.aBack, a.bBack], markerT: 0.3, strokeT: 0.25 };
+    case 'pistol':
+      return side === 'attack'
+        ? { foci: [a.atkSpawn], markerT: 0.22, strokeT: 0.15 }
+        : { foci: [a.defSpawn], markerT: 0.22, strokeT: 0.15 };
+    default:
+      return null;
+  }
+}
+
+function movePointToward(p: Pt, foci: Pt[], t: number): Pt {
+  let nearest = foci[0];
+  let best = Infinity;
+  for (const f of foci) {
+    const d = (f.x - p.x) ** 2 + (f.y - p.y) ** 2;
+    if (d < best) {
+      best = d;
+      nearest = f;
+    }
+  }
+  return lerpPt(p, nearest, t);
+}
+
+function applyTransforms(el: BoardElements, specs: TransformSpec[]): void {
+  for (const m of el.markers) {
+    if (m.kind !== 'position') continue;
+    let p: Pt = { x: m.x, y: m.y };
+    for (const s of specs) p = movePointToward(p, s.foci, s.markerT);
+    m.x = p.x;
+    m.y = p.y;
+  }
+  for (const st of el.strokes) {
+    st.points = st.points.map((pt) => {
+      let p: Pt = { x: pt.x, y: pt.y };
+      for (const s of specs) p = movePointToward(p, s.foci, s.strokeT);
+      return { x: p.x, y: p.y };
+    });
+  }
 }
 
 function clamp(v: number, min = 6, max = 94): number {
@@ -344,7 +442,7 @@ function makeRoute(id: string, pts: Pt[], color: string, dashed = true): RouteSt
   };
 }
 
-export function buildLiveMatchCounterPlay({
+function buildBaseCounterPlay({
   map,
   side,
   economy,
@@ -778,6 +876,39 @@ export function buildLiveMatchCounterPlay({
       };
     }
   }
+}
+
+export function buildLiveMatchCounterPlay({
+  map,
+  side,
+  economy,
+  problemId,
+  ourTeam,
+  variation = 1,
+  agentNames = [],
+}: {
+  map: ValorantMap;
+  side: Side;
+  economy: LiveMatchEconomy;
+  problemId: LiveMatchProblemId;
+  ourTeam: (string | null)[];
+  variation?: 1 | 2 | 3;
+  agentNames?: string[];
+}): LiveMatchCounterOutput {
+  const base = buildBaseCounterPlay({ map, side, economy, problemId, ourTeam });
+  const a = resolveMapAnchors(map);
+
+  const specs: TransformSpec[] = [getVariationTransform(variation, side, a)];
+  const ecoSpec = getEconomyTransform(economy, side, a);
+  if (ecoSpec) specs.push(ecoSpec);
+  applyTransforms(base.elements, specs);
+
+  base.variation = variation;
+  base.commands = base.commands.map((cmd, idx) => {
+    const name = agentNames[idx]?.trim();
+    return name ? { ...cmd, actor: name } : cmd;
+  });
+  return base;
 }
 
 export interface EnemyCounterWarningItem {
