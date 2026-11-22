@@ -59,17 +59,7 @@ export interface AiCoachResponse {
   utilityPlacements: AiUtilityPlacement[];
 }
 
-const COACH_TIMEOUT_MS = 20_000;
-const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
-
-function getApiKeys(): string[] {
-  const raw = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!raw || typeof raw !== 'string') return [];
-  return raw
-    .split(',')
-    .map((k) => k.trim())
-    .filter((k) => k.length > 0 && !k.includes('your_api_key'));
-}
+const COACH_TIMEOUT_MS = 25_000;
 
 interface ShortAgentOrder {
   a?: unknown;
@@ -144,7 +134,7 @@ function parseCoachResponse(rawText: string): AiCoachResponse {
   const braceStart = jsonStr.indexOf('{');
   const braceEnd = jsonStr.lastIndexOf('}');
   if (braceStart === -1 || braceEnd === -1) {
-    throw new Error('รูปแบบตอบกลับไม่ถูกต้อง');
+    throw new Error('รูปแบบตอบกลับจาก AI ไม่ถูกต้อง กรุณากดลองใหม่อีกครั้ง');
   }
   jsonStr = jsonStr.slice(braceStart, braceEnd + 1);
 
@@ -152,7 +142,7 @@ function parseCoachResponse(rawText: string): AiCoachResponse {
   try {
     data = JSON.parse(jsonStr) as ShortResponse;
   } catch {
-    throw new Error('แปลงข้อมูลจาก AI ไม่สำเร็จ');
+    throw new Error('แปลงข้อมูลจาก AI ไม่สำเร็จ กรุณากดลองใหม่อีกครั้ง');
   }
 
   const orders = Array.isArray(data.o) ? data.o : [];
@@ -197,62 +187,7 @@ function parseCoachResponse(rawText: string): AiCoachResponse {
   };
 }
 
-async function callGemini(prompt: string, apiKey: string, model: string, signal: AbortSignal): Promise<string> {
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal,
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.3,
-        maxOutputTokens: 400,
-      },
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`GEMINI_${res.status}`);
-  }
-
-  const payload = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
-  const text = payload.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
-  if (!text.trim()) throw new Error('EMPTY_RESPONSE');
-  return text;
-}
-
-async function callPollinationsFree(prompt: string, signal: AbortSignal): Promise<string> {
-  const res = await fetch('https://pollinations.ai', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal,
-    body: JSON.stringify({
-      model: 'openai',
-      messages: [
-        { role: 'system', content: 'You are a Valorant tactical coach. Respond ONLY with valid minified JSON.' },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.3,
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`เชื่อมต่อ AI ฟรีไม่สำเร็จ (${res.status})`);
-  }
-
-  const payload = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const text = payload.choices?.[0]?.message?.content ?? '';
-  if (!text.trim()) throw new Error('คำตอบจาก AI ว่างเปล่า');
-  return text;
-}
-
-// ---------- Main entry (Online 100% with Auto-Fallback & Unlimited Free Tier) ----------
+// ---------- Main entry (Pollinations GET URL — ฟรี ไม่ใช้ API Key ไม่ติด CORS) ----------
 
 export async function requestLiveCoachAdvice(
   input: LiveCoachRequest
@@ -261,40 +196,39 @@ export async function requestLiveCoachAdvice(
   const situation = input.situation.trim();
   const tags = input.tags.filter((t) => t.trim().length > 0).slice(0, 10);
 
-  if (!mapName) {
-    throw new Error('กรุณาระบุชื่อแผนที่');
-  }
+  if (!mapName) throw new Error('กรุณาระบุชื่อแผนที่');
   if (!situation && tags.length === 0) {
     throw new Error('กรุณาเลือก Tag ด่วน หรือพิมพ์สถานการณ์สั้นๆ ก่อนขอคำสั่ง');
   }
 
   const normalized: LiveCoachRequest = { ...input, situation, tags };
   const prompt = buildPrompt(normalized);
-  const apiKeys = getApiKeys();
+  const encodedPrompt = encodeURIComponent(prompt);
+  const seed = Math.floor(Math.random() * 100_000);
+  const url = `https://pollinations.ai{encodedPrompt}?json=true&seed=${seed}`;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), COACH_TIMEOUT_MS);
 
   try {
-    // 1. ลองเรียก Gemini จากทุกคีย์และโมเดลสำรองก่อน (ถ้ามีคีย์)
-    for (const key of apiKeys) {
-      for (const model of GEMINI_MODELS) {
-        try {
-          const rawText = await callGemini(prompt, key, model, controller.signal);
-          return parseCoachResponse(rawText);
-        } catch (e) {
-          if (e instanceof Error && e.name === 'AbortError') throw e;
-          // ถ้าติด 429 หรือโมเดลไม่รองรับ ให้ข้ามไปลองตัวถัดไปทันที
-        }
-      }
+    const res = await fetch(url, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      throw new Error(`เชื่อมต่อ AI ฟรีไม่สำเร็จ (${res.status}) — กรุณาลองใหม่อีกครั้ง`);
     }
 
-    // 2. หากไม่มีคีย์ Gemini หรือติดโควตา 429 ทุกตัว ให้สลับไปใช้ Pollinations AI (ฟรีไม่จำกัด) ทันที
-    const freeRawText = await callPollinationsFree(prompt, controller.signal);
-    return parseCoachResponse(freeRawText);
+    const rawText = await res.text();
+    if (!rawText.trim()) {
+      throw new Error('คำตอบจาก AI ว่างเปล่า กรุณากดลองใหม่อีกครั้ง');
+    }
+
+    return parseCoachResponse(rawText);
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('หมดเวลาการเชื่อมต่อ AI (เกิน 20 วินาที) — กรุณาลองใหม่อีกครั้ง');
+      throw new Error('หมดเวลาการเชื่อมต่อ AI (เกิน 25 วินาที) — กรุณาลองใหม่อีกครั้ง');
     }
     throw err instanceof Error ? err : new Error(String(err));
   } finally {
