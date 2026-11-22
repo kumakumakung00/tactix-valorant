@@ -42,6 +42,11 @@ import {
   LIVE_MATCH_ECONOMIES,
   buildEnemyCounterWarnings,
 } from '../utils/liveMatchEngine';
+import {
+  AiAgentOrder,
+  AiCoachResponse,
+  requestLiveCoachAdvice,
+} from '../services/liveCoachAi';
 import { AgentAvatar } from './AgentAvatar';
 
 export interface LiveMatchState {
@@ -54,33 +59,6 @@ export interface LiveMatchState {
   variation?: 1 | 2 | 3;
   situationText?: string;
   selectedTags?: string[];
-}
-
-interface AiAgentOrder {
-  slot: number;
-  agentId?: string;
-  agentName: string;
-  callout: string;
-  command: string;
-  x: number;
-  y: number;
-  roleTone: 'attack' | 'defense' | 'lurk' | 'warning';
-  moveToX?: number;
-  moveToY?: number;
-}
-
-interface AiUtilityPlacement {
-  kind: 'smoke' | 'flash' | 'recon' | 'molly' | 'wall' | 'spike' | 'pin';
-  label: string;
-  x: number;
-  y: number;
-}
-
-interface AiCoachResponse {
-  strategyName: string;
-  headline: string;
-  agentOrders: AiAgentOrder[];
-  utilityPlacements: AiUtilityPlacement[];
 }
 
 interface LiveMatchViewProps {
@@ -400,33 +378,19 @@ export function LiveMatchView({
         y: c.y,
       }));
 
-      const res = await fetch('/api/live-coach', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mapName: activeMap.name,
-          sites: activeMap.sites,
-          side: matchState.side,
-          economy: `${activeEconomyMeta.label} (${activeEconomyMeta.th})`,
-          ourTeam: ourTeamPayload,
-          enemyTeam: enemyTeamPayload,
-          callouts: calloutsPayload,
-          situation: situationText.trim(),
-          tags: selectedTags,
-        }),
+      const result = await requestLiveCoachAdvice({
+        mapName: activeMap.name,
+        sites: activeMap.sites,
+        side: matchState.side,
+        economy: `${activeEconomyMeta.label} (${activeEconomyMeta.th})`,
+        ourTeam: ourTeamPayload,
+        enemyTeam: enemyTeamPayload,
+        callouts: calloutsPayload,
+        situation: situationText.trim(),
+        tags: selectedTags,
       });
 
-      const data = (await res.json()) as Partial<AiCoachResponse> & { error?: string };
-      if (!res.ok) {
-        throw new Error(data.error || 'เกิดข้อผิดพลาดในการเชื่อมต่อ AI Coach');
-      }
-
-      setCoachPlan({
-        strategyName: data.strategyName || 'แผนแก้เกม AI Coach',
-        headline: data.headline || 'ปรับตำแหน่งตามคำสั่งโค้ชด้านล่างทันที',
-        agentOrders: Array.isArray(data.agentOrders) ? data.agentOrders : [],
-        utilityPlacements: Array.isArray(data.utilityPlacements) ? data.utilityPlacements : [],
-      });
+      setCoachPlan(result);
     } catch (err) {
       setCoachError(
         err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อ AI Coach ได้ในขณะนี้'
