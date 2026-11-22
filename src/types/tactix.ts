@@ -18,7 +18,7 @@ export type LiveMatchProblemId =
   | 'def_postplant_lose'
   | 'def_man_down';
 
-export type AppView = 'board' | 'livematch' | 'training' | 'progress' | 'crosshairs';
+export type AppView = 'board' | 'livematch' | 'training' | 'progress' | 'crosshairs' | 'sensfinder';
 
 export interface PendingAbilityPlace {
   agentId: string;

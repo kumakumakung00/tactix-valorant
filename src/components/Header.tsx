@@ -15,6 +15,7 @@ const NAV_ITEMS: { id: AppView; label: string }[] = [
   { id: 'training', label: 'การฝึกเล่น' },
   { id: 'progress', label: 'พัฒนาฝีมือ (My Progress)' },
   { id: 'crosshairs', label: 'โค้ดเป้าเล็ง (Crosshairs)' },
+  { id: 'sensfinder', label: 'AI Sens & DPI Finder' },
 ];
 
 export function Header({
