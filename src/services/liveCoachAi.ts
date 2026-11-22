@@ -187,7 +187,7 @@ function parseCoachResponse(rawText: string): AiCoachResponse {
   };
 }
 
-// ---------- Main entry (Pollinations GET URL — ฟรี ไม่ใช้ API Key ไม่ติด CORS) ----------
+// ---------- Main entry (Pollinations GET via CORS Proxy — ไม่ใช้ API Key ไม่ติด CORS) ----------
 
 export async function requestLiveCoachAdvice(
   input: LiveCoachRequest
@@ -205,7 +205,8 @@ export async function requestLiveCoachAdvice(
   const prompt = buildPrompt(normalized);
   const encodedPrompt = encodeURIComponent(prompt);
   const seed = Math.floor(Math.random() * 100_000);
-  const url = `https://pollinations.ai{encodedPrompt}?json=true&seed=${seed}`;
+  const targetUrl = `https://pollinations.ai{encodedPrompt}?json=true&seed=${seed}`;
+  const url = `https://allorigins.win{encodeURIComponent(targetUrl)}`;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), COACH_TIMEOUT_MS);
