@@ -60,8 +60,10 @@ export interface AiCoachResponse {
   utilityPlacements: AiUtilityPlacement[];
 }
 
-const COACH_TIMEOUT_MS = 45_000;
+const COACH_TIMEOUT_MS = 60_000;
 const GEMINI_MODEL = 'gemini-3.8-flash';
+
+const OFFLINE_MESSAGE = 'ไม่มีการเชื่อมต่ออินเทอร์เน็ต — ตรวจสอบเครือข่าย (Wi-Fi/มือถือ) แล้วกดขอคำสั่งใหม่อีกครั้ง';
 
 function getApiKey(): string {
   const key = import.meta.env.VITE_GEMINI_API_KEY;
@@ -71,43 +73,58 @@ function getApiKey(): string {
   return key.trim();
 }
 
+// โครงสร้าง JSON ย่อที่ส่งกลับจาก AI (key ตัวอักษรเดียวเพื่อประหยัด bandwidth)
+interface ShortAgentOrder {
+  a?: unknown; // agentName
+  t?: unknown; // command
+  x?: unknown;
+  y?: unknown;
+  r?: unknown; // roleTone
+  m?: unknown; // [moveToX, moveToY]
+}
+interface ShortUtility {
+  k?: unknown; // kind
+  l?: unknown; // label
+  x?: unknown;
+  y?: unknown;
+}
+interface ShortResponse {
+  s?: unknown; // strategyName
+  h?: unknown; // headline
+  o?: ShortAgentOrder[]; // agentOrders
+  u?: ShortUtility[]; // utilityPlacements
+}
+
+const ROLE_TONES: AiAgentOrder['roleTone'][] = ['attack', 'defense', 'lurk', 'warning'];
+const UTILITY_KINDS: AiUtilityPlacement['kind'][] = [
+  'smoke',
+  'flash',
+  'recon',
+  'molly',
+  'wall',
+  'spike',
+  'pin',
+];
+
 function buildPrompt(input: LiveCoachRequest): string {
   const our = input.ourTeam
     .slice(0, 5)
-    .map((a) => `- slot:${a.slot} agent:${a.name} role:${a.role}`)
-    .join('\n');
+    .map((a) => `${a.name}(${a.role})`)
+    .join(',');
   const enemy = input.enemyTeam
     .slice(0, 5)
-    .map((a) => `- ${a.name} (${a.role})`)
-    .join('\n');
-  const callouts = input.callouts
-    .slice(0, 20)
-    .map((c) => `- ${c.key} (${c.group}) x:${c.x} y:${c.y}`)
-    .join('\n');
+    .map((a) => a.name)
+    .join(',');
+  const problem = [...input.tags, input.situation.trim()].filter(Boolean).join('; ');
 
   return [
-    'คุณคือโค้ช Valorant ระดับมืออาชีพ ตอบเป็นภาษาไทย',
-    'ตอบสั้นกระชับที่สุด: แต่ละคำสั่งไม่เกิน 1 ประโยค',
-    '',
-    `แผนที่: ${input.mapName}`,
-    `ไซท์: ${input.sites.join(', ')}`,
-    `ฝั่ง: ${input.side === 'attack' ? 'บุก' : 'รับ'}`,
-    `สถานะเงิน: ${input.economy}`,
-    `สถานการณ์: ${input.situation || '(ไม่ได้พิมพ์)'}`,
-    `แท็ก: ${input.tags.join(', ') || '(ไม่มี)'}`,
-    '',
-    'ทีมเรา:',
-    our,
-    '',
-    'ทีมศัตรู:',
-    enemy,
-    '',
-    'จุดสังเกตบนแผนที่ (พิกัด 0-100):',
-    callouts,
-    '',
-    'ตอบกลับเป็น JSON เท่านั้น ตามรูปแบบนี้:',
-    '{"strategyName": string, "headline": string (1 ประโยค), "agentOrders": [{"slot": number, "agentName": string, "callout": string, "command": string (สั้นๆ 1 ประโยค), "x": number, "y": number, "roleTone": "attack"|"defense"|"lurk"|"warning", "moveToX"?: number, "moveToY"?: number}], "utilityPlacements": [{"kind": "smoke"|"flash"|"recon"|"molly"|"wall"|"spike"|"pin", "label": string, "x": number, "y": number}]}',
-    'กฎ: agentOrders ต้องมีครบทุกตัวในทีมเรา (ใช้ slot เดิม), x/y ต้องเป็นพิกัด 0-100 จากจุดสังเกตที่ใกล้ที่สุด, ห้ามอธิบายนอกเหนือจาก JSON',
+    `โค้ช Valorant ภาษาไทย แผนที่:${input.mapName} ฝั่ง:${input.side === 'attack' ? 'บุก' : 'รับ'} เงิน:${input.economy}`,
+    `เรา:${our}`,
+    `ศัตรู:${enemy || '-'}`,
+    `ปัญหา:${problem || '-'}`,
+    'สั่งทีม 5 คน ตอบ JSON ย่อเท่านั้น:',
+    '{"s":"ชื่อแผนสั้น","h":"สรุป1ประโยค","o":[{"a":"ชื่อAgent","t":"คำสั่งไม่เกิน12คำ","x":0-100,"y":0-100,"r":"attack|defense|lurk|warning","m":[x,y]}],"u":[{"k":"smoke|flash|recon|molly|wall|spike","l":"ชื่อสกิล","x":0-100,"y":0-100}]}',
+    'ทุกคำสั่งสั้นกระชับ x,y เป็นเลขจำนวนเต็ม ห้ามตอบนอก JSON',
   ].join('\n');
 }
 
@@ -115,6 +132,10 @@ function clampCoord(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) return 50;
   return Math.min(100, Math.max(0, Math.round(n)));
+}
+
+function asString(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
 function parseCoachResponse(rawText: string): AiCoachResponse {
@@ -130,32 +151,49 @@ function parseCoachResponse(rawText: string): AiCoachResponse {
   }
   jsonStr = jsonStr.slice(braceStart, braceEnd + 1);
 
-  let data: Partial<AiCoachResponse>;
+  let data: ShortResponse;
   try {
-    data = JSON.parse(jsonStr) as Partial<AiCoachResponse>;
+    data = JSON.parse(jsonStr) as ShortResponse;
   } catch {
     throw new Error('แปลงข้อมูลจาก AI ไม่สำเร็จ กรุณาลองอีกครั้ง');
   }
 
-  const orders = Array.isArray(data.agentOrders) ? data.agentOrders : [];
-  const utils = Array.isArray(data.utilityPlacements) ? data.utilityPlacements : [];
+  const orders = Array.isArray(data.o) ? data.o : [];
+  const utils = Array.isArray(data.u) ? data.u : [];
 
   return {
-    strategyName: data.strategyName || 'แผนแก้เกม AI Coach',
-    headline: data.headline || 'ปรับตำแหน่งตามคำสั่งโค้ชด้านล่างทันที',
+    strategyName: asString(data.s, 'แผนแก้เกม AI Coach'),
+    headline: asString(data.h, 'ปรับตำแหน่งตามคำสั่งโค้ชด้านล่างทันที'),
     agentOrders: orders
-      .filter((o): o is AiAgentOrder => !!o && typeof o === 'object')
-      .map((o) => ({
-        ...o,
-        x: clampCoord(o.x),
-        y: clampCoord(o.y),
-        moveToX: o.moveToX !== undefined ? clampCoord(o.moveToX) : undefined,
-        moveToY: o.moveToY !== undefined ? clampCoord(o.moveToY) : undefined,
-      })),
+      .filter((o): o is ShortAgentOrder => !!o && typeof o === 'object')
+      .map((o, idx) => {
+        let moveToX: number | undefined;
+        let moveToY: number | undefined;
+        if (Array.isArray(o.m) && o.m.length >= 2) {
+          moveToX = clampCoord(o.m[0]);
+          moveToY = clampCoord(o.m[1]);
+        }
+        return {
+          slot: idx,
+          agentName: asString(o.a, `ช่อง ${idx + 1}`),
+          callout: '',
+          command: asString(o.t, 'คุมตำแหน่งเดิม'),
+          x: clampCoord(o.x),
+          y: clampCoord(o.y),
+          roleTone: ROLE_TONES.includes(o.r as AiAgentOrder['roleTone'])
+            ? (o.r as AiAgentOrder['roleTone'])
+            : 'attack',
+          moveToX,
+          moveToY,
+        };
+      }),
     utilityPlacements: utils
-      .filter((u): u is AiUtilityPlacement => !!u && typeof u === 'object')
+      .filter((u): u is ShortUtility => !!u && typeof u === 'object')
       .map((u) => ({
-        ...u,
+        kind: UTILITY_KINDS.includes(u.k as AiUtilityPlacement['kind'])
+          ? (u.k as AiUtilityPlacement['kind'])
+          : 'pin',
+        label: asString(u.l, 'จุดวางสกิล'),
         x: clampCoord(u.x),
         y: clampCoord(u.y),
       })),
@@ -176,6 +214,10 @@ export async function requestLiveCoachAdvice(
     throw new Error('กรุณาเลือก Tag ด่วน หรือพิมพ์สถานการณ์สั้นๆ ก่อนขอคำสั่ง');
   }
 
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new Error(OFFLINE_MESSAGE);
+  }
+
   const apiKey = getApiKey();
   const ai = new GoogleGenAI({ apiKey });
 
@@ -188,8 +230,8 @@ export async function requestLiveCoachAdvice(
       contents: buildPrompt({ ...input, situation, tags }),
       config: {
         responseMimeType: 'application/json',
-        temperature: 0.6,
-        maxOutputTokens: 1200,
+        temperature: 0.3,
+        maxOutputTokens: 350,
         abortSignal: controller.signal,
       },
     });
@@ -200,9 +242,12 @@ export async function requestLiveCoachAdvice(
     }
     return parseCoachResponse(rawText);
   } catch (err) {
+    if (err instanceof TypeError) {
+      throw new Error(OFFLINE_MESSAGE);
+    }
     if (err instanceof Error && (err.name === 'AbortError' || err.name === 'ApiError')) {
       throw new Error(
-        'หมดเวลาการเชื่อมต่อ Gemini API (เกิน 45 วินาที) — กรุณากดขอคำสั่งใหม่อีกครั้ง'
+        'หมดเวลาการเชื่อมต่อ Gemini API (เกิน 60 วินาที) — เน็ตช้าหรือหลุด กรุณากดขอคำสั่งใหม่อีกครั้ง'
       );
     }
     throw err instanceof Error ? err : new Error(String(err));
