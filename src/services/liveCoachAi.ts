@@ -57,11 +57,9 @@ export interface AiCoachResponse {
   headline: string;
   agentOrders: AiAgentOrder[];
   utilityPlacements: AiUtilityPlacement[];
-  /** true = แผนจากฐานข้อมูลในเครื่อง (Offline Tactical Mode) ไม่ใช่คำตอบจาก AI */
-  offline?: boolean;
 }
 
-const COACH_TIMEOUT_MS = 8_000;
+const COACH_TIMEOUT_MS = 20_000;
 const GEMINI_MODEL = 'gemini-3.8-flash';
 
 // ยิงตรงเข้า REST API ของ Gemini ด้วย fetch ธรรมดา (ไม่ผ่าน SDK ลดขนาด bundle บนเน็ตมือถือ)
@@ -203,112 +201,7 @@ function parseCoachResponse(rawText: string): AiCoachResponse {
   };
 }
 
-// ---------- Smart Fallback: แผนสำรองในเครื่อง (ไม่ใช้เน็ต ตอบทันที) ----------
-
-interface RoleFallback {
-  attack: string;
-  defense: string;
-  tone: AiAgentOrder['roleTone'];
-}
-
-const ROLE_FALLBACKS: Record<string, RoleFallback> = {
-  duelist: {
-    attack: 'บุกนำหน้าเปิดไซท์ เล็งมุมประชิดก่อนเพื่อนโผล่',
-    defense: 'ดวลมุมประชิดที่เสาหลัก ยิงได้ 1 แล้วถอยเปลี่ยนมุม',
-    tone: 'attack',
-  },
-  initiator: {
-    attack: 'ส่องข่าว/ปาแฟลชเปิดทางก่อนทีมเข้า ห้ามลักไก่',
-    defense: 'วิ่งรีคอนมุมอับ รายงานจำนวนศัตรูก่อนตัดสินใจ',
-    tone: 'defense',
-  },
-  controller: {
-    attack: 'ปาสโมคคลุมมุมอันตรายที่ลิสต์ แล้วค่อยพาทีมขึ้น',
-    defense: 'คุมควันตัดทางเข้าไซท์ รีบปาทันทีที่ได้ข่าว',
-    tone: 'defense',
-  },
-  sentinel: {
-    attack: 'เฝ้าหลัง/ปิดทางวิ่งกลับ ห้ามแยกไกลเกินกำลัง',
-    defense: 'ล็อกมุมเข้าไซท์ด้วยกับดัก ยืนตำแหน่งเดิมไม่ต้องหมุนเร็ว',
-    tone: 'warning',
-  },
-};
-
-function pickCallouts(input: LiveCoachRequest, count: number): CoachCalloutInput[] {
-  const relevant = input.callouts.filter((c) => {
-    if (input.side === 'attack') return c.group === 'Atk' || c.group === 'Mid' || c.group === 'Site';
-    return c.group === 'Def' || c.group === 'Mid' || c.group === 'Site';
-  });
-  const pool = relevant.length >= count ? relevant : input.callouts;
-  if (pool.length === 0) return [];
-  return Array.from({ length: Math.min(count, pool.length) }, (_, i) => pool[i % pool.length]);
-}
-
-export function buildLocalFallbackPlan(input: LiveCoachRequest): AiCoachResponse {
-  const callouts = pickCallouts(input, 5);
-  const isAttack = input.side === 'attack';
-  const tagsLower = input.tags.join(' ').toLowerCase();
-  const isRetake = tagsLower.includes('retake') || tagsLower.includes('รีเทค');
-  const isEco = tagsLower.includes('eco') || tagsLower.includes('ประหยัด') || input.economy.toLowerCase().includes('eco');
-
-  const orders: AiAgentOrder[] = input.ourTeam.slice(0, 5).map((agent, idx) => {
-    const role = agent.role.toLowerCase();
-    const fb = ROLE_FALLBACKS[role] ?? ROLE_FALLBACKS.initiator;
-    const pos = callouts[idx];
-    const command = isRetake && role === 'controller'
-      ? 'ปาสโมคคลุม Spike ก่อนทีมแตะ แล้วเข้าพร้อมกัน 2 ทิศ'
-      : isEco
-        ? `${fb[isAttack ? 'attack' : 'defense']} (รอบนี้เล่นรวมกลุ่ม ห้ามแยกเดี่ยว)`
-        : fb[isAttack ? 'attack' : 'defense'];
-    return {
-      slot: agent.slot || idx + 1,
-      agentId: agent.id,
-      agentName: agent.name,
-      callout: pos?.key ?? '-',
-      command,
-      x: pos?.x ?? 50,
-      y: pos?.y ?? 50,
-      roleTone: isRetake ? 'warning' : fb.tone,
-      moveToX: pos ? Math.min(100, Math.max(0, pos.x + (isAttack ? 4 : -4))) : undefined,
-      moveToY: pos?.y,
-    };
-  });
-
-  const siteCallout = callouts[0];
-  const utilityPlacements: AiUtilityPlacement[] = [];
-  if (siteCallout) {
-    utilityPlacements.push({
-      kind: 'smoke',
-      label: isAttack ? `Smoke ปิดมุม ${siteCallout.key}` : `Smoke ตัดทางเข้า ${siteCallout.key}`,
-      x: siteCallout.x,
-      y: siteCallout.y,
-    });
-    utilityPlacements.push({
-      kind: 'recon',
-      label: 'Recon ส่องข่าวก่อนเปิด',
-      x: Math.min(100, Math.max(0, siteCallout.x - 6)),
-      y: Math.min(100, Math.max(0, siteCallout.y + 6)),
-    });
-  }
-
-  const headline = isRetake
-    ? `รีเทค ${input.sites.join('/')} แบบพร้อมกัน — รอสกิลครบแล้วเปิดเข้า 2 ทิศ`
-    : isEco
-      ? 'เล่นรวมกลุ่มเก็บปืน ห้ามแลกเดี่ยว ตัดเงินศัตรูให้ได้ก่อน'
-      : isAttack
-        ? `Execute เข้า ${input.sites.join('/') || 'ไซท์หลัก'} พร้อมกันตามลำดับคำสั่งด้านล่าง`
-        : 'ยืนฐานรับตามบทบาท เช็คข่าวก่อนหมุนทีม';
-
-  return {
-    strategyName: isRetake ? 'แผนรีเทค (สำรอง)' : isEco ? 'แผนเก็บเงิน (สำรอง)' : isAttack ? 'แผนบุกพร้อมกัน (สำรอง)' : 'แผนตั้งรับฐาน (สำรอง)',
-    headline,
-    agentOrders: orders,
-    utilityPlacements,
-    offline: true,
-  };
-}
-
-// ---------- Main entry ----------
+// ---------- Main entry (Online 100% via Gemini API) ----------
 
 export async function requestLiveCoachAdvice(
   input: LiveCoachRequest
@@ -325,45 +218,49 @@ export async function requestLiveCoachAdvice(
   }
 
   const normalized: LiveCoachRequest = { ...input, situation, tags };
+  const apiKey = getApiKey();
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), COACH_TIMEOUT_MS);
 
   try {
-    const apiKey = getApiKey();
+    const res = await fetch(buildEndpoint(apiKey), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: buildPrompt(normalized) }] }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.3,
+          maxOutputTokens: 350,
+        },
+      }),
+    });
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), COACH_TIMEOUT_MS);
-
-    try {
-      const res = await fetch(buildEndpoint(apiKey), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: buildPrompt(normalized) }] }],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.3,
-            maxOutputTokens: 350,
-          },
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`API status ${res.status}`);
-      }
-
-      const payload = (await res.json()) as {
-        candidates?: { content?: { parts?: { text?: string }[] } }[];
-      };
-      const rawText = payload.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
-      if (!rawText.trim()) {
-        throw new Error('คำตอบว่างเปล่า');
-      }
-      return parseCoachResponse(rawText);
-    } finally {
-      clearTimeout(timeoutId);
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => null)) as {
+        error?: { message?: string };
+      } | null;
+      const errMsg = errBody?.error?.message || `API status ${res.status}`;
+      throw new Error(`เชื่อมต่อ Gemini API ไม่สำเร็จ (${res.status}): ${errMsg}`);
     }
-  } catch {
-    // Smart Fallback: เน็ตช้า/หลุด/API ล่ม → ไม่ขึ้น Error ใช้แผนในเครื่องทันที
-    return buildLocalFallbackPlan(normalized);
+
+    const payload = (await res.json()) as {
+      candidates?: { content?: { parts?: { text?: string }[] } }[];
+    };
+    const rawText =
+      payload.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+    if (!rawText.trim()) {
+      throw new Error('คำตอบจาก AI ว่างเปล่า กรุณาลองใหม่อีกครั้ง');
+    }
+    return parseCoachResponse(rawText);
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('หมดเวลาการเชื่อมต่อ Gemini API (เกิน 20 วินาที) — กรุณาลองใหม่อีกครั้ง');
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

@@ -961,11 +961,6 @@ export function LiveMatchView({
                     — {coachPlan.strategyName}
                   </span>
                 )}
-                {coachPlan?.offline && (
-                  <span className="shrink-0 border border-[#FBBF24]/60 bg-[#FBBF24]/15 px-1.5 py-0.5 text-[10px] font-bold text-[#FBBF24]">
-                    Offline Tactical Mode
-                  </span>
-                )}
               </div>
               <button
                 type="button"
@@ -1378,11 +1373,6 @@ export function LiveMatchView({
               ) : coachPlan ? (
                 <>
                   <div className="border border-[#263145] bg-[#171E2B] px-3 py-2">
-                    {coachPlan.offline && (
-                      <span className="mb-1 inline-block border border-[#FBBF24]/60 bg-[#FBBF24]/15 px-1.5 py-0.5 text-[10px] font-bold text-[#FBBF24]">
-                        Offline Tactical Mode · แผนสำรองจากในเครื่อง (เน็ตช้า/หลุด)
-                      </span>
-                    )}
                     <div className="text-xs font-bold text-[#34D399]">
                       {coachPlan.strategyName}
                     </div>
