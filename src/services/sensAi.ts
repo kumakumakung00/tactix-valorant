@@ -1,7 +1,46 @@
+export type TestMode = 'quick' | 'standard' | 'pro';
+
+export interface TestModeMeta {
+  id: TestMode;
+  label: string;
+  stageDurationSec: number;
+  totalDurationSec: number;
+  description: string;
+  badge: string;
+}
+
+export const TEST_MODES: Record<TestMode, TestModeMeta> = {
+  quick: {
+    id: 'quick',
+    label: 'Quick (45 วิ)',
+    stageDurationSec: 15,
+    totalDurationSec: 45,
+    description: 'ด่านละ 15 วินาที · เช็กด่วนระหว่างรอคิว',
+    badge: 'เช็กด่วน',
+  },
+  standard: {
+    id: 'standard',
+    label: 'Standard (90 วิ)',
+    stageDurationSec: 30,
+    totalDurationSec: 90,
+    description: 'ด่านละ 30 วินาที · ค่าเริ่มต้น — แนะนำ',
+    badge: 'แนะนำ',
+  },
+  pro: {
+    id: 'pro',
+    label: 'Pro (135 วิ)',
+    stageDurationSec: 45,
+    totalDurationSec: 135,
+    description: 'ด่านละ 45 วินาที · วิเคราะห์ละเอียด วัดความนิ่งระยะยาว',
+    badge: 'แม่นยำสูงสุด',
+  },
+};
+
 export interface SensTestStats {
   dpi: number;
   currentSens: number;
-  gripStyle: 'wrist' | 'arm';
+  testMode: TestMode;
+  testDurationSeconds: number;
 
   // Stage 1: Flick & Micro-Adjust
   flickAccuracyPct: number;
@@ -13,7 +52,7 @@ export interface SensTestStats {
 
   // Stage 2: Smooth Tracking
   trackingPct: number; // Time on Target (%)
-  stabilityScore: number; // Stability score (0-100)
+  stabilityScore: number; // Hand stability (0-100)
 
   // Stage 3: Multi-Target Switch
   sweepSpeedPxPerSec: number; // Sweep speed (px/s)
@@ -28,6 +67,7 @@ export interface SensAiResult {
   sensAt800: string;
   sensAt1600: string;
   cm360: string;
+  confidenceScore: number; // ระดับความแม่นยำ % (เช่น 92-98%)
   headline: string;
   strengths: string[];
   weaknesses: string[];
@@ -48,7 +88,7 @@ export function calcCm360(dpi: number, sens: number): number {
 
 /**
  * คำนวณค่า Sens, eDPI และทางเลือกสำหรับ 800 / 1600 DPI
- * จากสถิติจริงทั้ง 3 ด่านตามหลักสรีรศาสตร์และกลไกเกม Valorant
+ * อิงตามสถิติจริงจากทั้ง 3 ด่าน (Flick, Tracking, Switch) + ระดับเวลาที่เลือก
  */
 export function calculateRecommendedSens(stats: SensTestStats): {
   recommendedSens: string;
@@ -56,45 +96,39 @@ export function calculateRecommendedSens(stats: SensTestStats): {
   sensAt800: string;
   sensAt1600: string;
   cm360: string;
+  confidenceScore: number;
 } {
   const currentEdpi = calcEdpi(stats.dpi, stats.currentSens);
   let targetEdpi = currentEdpi > 0 ? currentEdpi : 280;
 
-  // 1. ชดเชยตามค่า Overshoot vs Undershoot จากด่าน 1
+  // 1. ชดเชยค่า Overshoot vs Undershoot จากด่าน 1
   const netShootDiff = stats.overshootPct - stats.undershootPct;
   if (netShootDiff > 12) {
-    // ลากเลยเป้าบ่อย แปลว่า Sens ไวเกินการควบคุม -> ลด Sens ลง 5% ถึง 18%
+    // ลากเลยเป้าบ่อย (Overshoot) -> Sens ไวเกินการหยุดยิง -> ปรับลดลง 5% ถึง 18%
     const reduction = Math.min(0.18, (netShootDiff / 100) * 0.28);
     targetEdpi *= 1 - reduction;
   } else if (netShootDiff < -12) {
-    // ลากไม่ถึงเป้าบ่อย แปลว่า Sens ช้าเกินไปจนต้องออกแรงมาก -> เพิ่ม Sens ขึ้น 5% ถึง 18%
+    // ลากไม่ถึงเป้าบ่อย (Undershoot) -> Sens หน่วงไป -> ปรับเพิ่มขึ้น 5% ถึง 18%
     const increase = Math.min(0.18, (Math.abs(netShootDiff) / 100) * 0.28);
     targetEdpi *= 1 + increase;
   }
 
   // 2. ปรับตามความนิ่งของมือและการเลี้ยงเป้า (Tracking & Stability) จากด่าน 2
   if (stats.stabilityScore < 60 && targetEdpi > 240) {
-    // มือสั่นหรือเป้าสะบัดตอนเลี้ยงเป้า -> ลด eDPI ลงเพื่อเพิ่มความเสถียร
-    targetEdpi *= 0.93;
+    targetEdpi *= 0.93; // มือสั่นหรือเป้ากระตุก ลด Sens เพื่อความเสถียร
   } else if (stats.stabilityScore >= 85 && stats.trackingPct >= 75) {
-    // มือมีความนิ่งสูงมาก เลี้ยงเป้าเนียน -> สามารถใช้ Sens ไวขึ้นได้เล็กน้อยหากต้องการ
-    if (stats.undershootPct > 35) targetEdpi *= 1.05;
+    if (stats.undershootPct > 35) targetEdpi *= 1.05; // ควบคุมได้นิ่งมาก เพิ่มความคล่องตัวได้
   }
 
-  // 3. ปรับตามความเร็วในการกวาดเมาส์ (Sweep Speed) จากด่าน 3
-  if (stats.sweepSpeedPxPerSec < 750 && stats.gripStyle === 'wrist' && targetEdpi < 270) {
-    // สไตล์ข้อมือแต่กวาดช้า -> เพิ่ม Sens ขึ้นเล็กน้อยเพื่อลดภาระข้อต่อ
-    targetEdpi *= 1.05;
+  // 3. ปรับตาม Sweep Speed จากด่าน 3
+  if (stats.sweepSpeedPxPerSec < 750 && targetEdpi < 260) {
+    targetEdpi *= 1.06;
   } else if (stats.sweepSpeedPxPerSec > 1600 && stats.switchAccuracyPct < 60) {
-    // กวาดไวเกินไปจนสะบัดหลุดเป้า -> ลด Sens ลงเพื่อให้เกาะเป้าแม่นขึ้น
-    targetEdpi *= 0.94;
+    targetEdpi *= 0.94; // กวาดไวเกินไปจนสะบัดหลุด ลด Sens เพื่อเพิ่มความแม่นยำ
   }
 
-  // 4. บีบให้อยู่ในกรอบมาตรฐาน Competitive Valorant
-  // สไตล์ข้อมือ (Wrist): 210 - 340 eDPI | สไตล์แขน (Arm): 170 - 270 eDPI
-  const minEdpi = stats.gripStyle === 'wrist' ? 210 : 170;
-  const maxEdpi = stats.gripStyle === 'wrist' ? 340 : 280;
-  targetEdpi = Math.max(minEdpi, Math.min(maxEdpi, Math.round(targetEdpi)));
+  // 4. บีบให้อยู่ในกรอบมาตรฐานการแข่งขัน Valorant Pro (180 - 320 eDPI)
+  targetEdpi = Math.max(180, Math.min(320, Math.round(targetEdpi)));
 
   const safeDpi = stats.dpi > 0 ? stats.dpi : 800;
   const recommendedSensNum = Math.round((targetEdpi / safeDpi) * 1000) / 1000;
@@ -102,17 +136,28 @@ export function calculateRecommendedSens(stats: SensTestStats): {
   const sensAt1600Num = Math.round((targetEdpi / 1600) * 1000) / 1000;
   const cm360Str = String(calcCm360(safeDpi, recommendedSensNum));
 
+  // 5. คำนวณ Confidence Score (ระดับความแม่นยำตามระยะเวลาการเทสและปริมาณข้อมูล)
+  let baseConfidence = 90; // Standard mode default
+  if (stats.testMode === 'pro') baseConfidence = 96;
+  else if (stats.testMode === 'quick') baseConfidence = 84;
+
+  const totalShots = stats.flickTotalShots + stats.switchTotalShots;
+  if (totalShots >= 35) baseConfidence += 2;
+  if (stats.stabilityScore >= 75) baseConfidence += 1;
+  const confidenceScore = Math.min(99, Math.max(78, baseConfidence));
+
   return {
     recommendedSens: recommendedSensNum.toFixed(3),
     recommendedEdpi: String(targetEdpi),
     sensAt800: sensAt800Num.toFixed(3),
     sensAt1600: sensAt1600Num.toFixed(3),
     cm360: cm360Str,
+    confidenceScore,
   };
 }
 
 /**
- * สร้างการวิเคราะห์อัตโนมัติด้วยสูตรคำนวณ (ใช้เป็นแผนสำรองหรือแสดงผลทันทีก่อน AI ตอบ)
+ * สร้างผลวิเคราะห์ทางคณิตศาสตร์ทันที (Fallback กรณีไม่มีคีย์หรือเน็ตมีปัญหา)
  */
 export function generateAlgorithmicAnalysis(stats: SensTestStats): SensAiResult {
   const calc = calculateRecommendedSens(stats);
@@ -120,52 +165,46 @@ export function generateAlgorithmicAnalysis(stats: SensTestStats): SensAiResult 
   const weaknesses: string[] = [];
   const tips: string[] = [];
 
-  // วิเคราะห์จุดเด่น
   if (stats.flickAccuracyPct >= 70) {
-    strengths.push(`Flick เข้าเป้าแม่นยำสูง (${stats.flickAccuracyPct}%) จับจังหวะสแนปเป้าได้ดี`);
+    strengths.push(`Flick เข้าเป้าแม่นยำ ${stats.flickAccuracyPct}% สแนปเป้าหมายได้เฉียบคม`);
   }
   if (stats.trackingPct >= 65) {
-    strengths.push(`เลี้ยงเป้า Tracking ต่อเนื่อง (${stats.trackingPct}%) เกาะติดเป้าหมายเคลื่อนไหวได้เยี่ยม`);
+    strengths.push(`เกาะเป้า Tracking ได้เสถียร ${stats.trackingPct}% ควบคุมการเคลื่อนไหวได้ดี`);
   }
   if (stats.stabilityScore >= 75) {
-    strengths.push(`ความนิ่งของมือยอดเยี่ยม (Stability ${stats.stabilityScore}%) สไตล์การลากเนียนตา`);
+    strengths.push(`ความนิ่งของมือดีเยี่ยม (Stability ${stats.stabilityScore}%) กล้ามเนื้อไม่สั่นกระตุก`);
   }
-  if (stats.sweepSpeedPxPerSec >= 1100) {
-    strengths.push(`กวาดเมาส์สลับมุมข้ามจอได้ว่องไว (${stats.sweepSpeedPxPerSec} px/s)`);
+  if (stats.sweepSpeedPxPerSec >= 1050) {
+    strengths.push(`ความเร็วในการกวาดเมาส์สูง (${stats.sweepSpeedPxPerSec} px/s) สลับมุมยิงได้ฉับไว`);
   }
   if (strengths.length === 0) {
-    strengths.push('มีความมุ่งมั่นและพร้อมปรับกล้ามเนื้อมือเข้าสู่ Sens ที่เหมาะสม');
-    strengths.push('สามารถควบคุมจังหวะการเล็งเป้าพื้นฐานได้สม่ำเสมอ');
+    strengths.push('ควบคุมจังหวะการเล็งพื้นฐานได้สม่ำเสมอ พร้อมปรับ Muscle Memory เข้าหา Sens ใหม่');
   }
 
-  // วิเคราะห์จุดด้อย
   if (stats.overshootPct >= 50) {
-    weaknesses.push(`มีอาการลากเลยเป้าชัดเจน (Overshoot ${stats.overshootPct}%) เกิดจาก Sens เดิมที่ไวเกินการหยุดกะทันหัน`);
+    weaknesses.push(`มีอาการลากเลยเป้า (Overshoot ${stats.overshootPct}%) บ่งบอกว่า Sens เดิมสูงเกินแรงเบรก`);
   }
   if (stats.undershootPct >= 50) {
-    weaknesses.push(`สะบัดไม่ถึงเป้า (Undershoot ${stats.undershootPct}%) ต้องออกแรงแก้เมาส์สองจังหวะ`);
+    weaknesses.push(`ลากไม่ถึงเป้า (Undershoot ${stats.undershootPct}%) ต้องออกแรงแก้เมาส์ซ้ำสองจังหวะ`);
   }
-  if (stats.avgMicroAdjustMs > 180) {
-    weaknesses.push(`เวลาในการแก้เป้า Micro-adjust ค่อนข้างช้า (${stats.avgMicroAdjustMs}ms) เสียเปรียบในจังหวะดวลหน้าตัด`);
+  if (stats.avgMicroAdjustMs > 175) {
+    weaknesses.push(`เวลาแก้เป้า Micro-adjust ช้า (${stats.avgMicroAdjustMs}ms) อาจเสียเปรียบในการดวล First-shot`);
   }
   if (stats.stabilityScore < 65) {
-    weaknesses.push(`ความนิ่งของมือยังแกว่ง (${stats.stabilityScore}%) มีการกระตุกเล็กน้อยระหว่างตามเป้า`);
+    weaknesses.push(`ความนิ่งของมือแกว่ง (${stats.stabilityScore}%) มีการกระตุกเล็กน้อยระหว่างตามเป้า`);
   }
   if (weaknesses.length === 0) {
-    weaknesses.push('ยังสามารถเพิ่มสปีดการเปลี่ยนเป้า (Switching) ในมุมกว้างได้อีกระดับ');
+    weaknesses.push('การกวาดเมาส์มุมกว้างยังมีพื้นที่ให้เพิ่มสปีดและความแม่นยำได้อีกระดับ');
   }
 
-  // คำแนะนำแบบโค้ชมืออาชีพ
   tips.push(
-    `ปรับมาใช้ Sens แนะนำ ${calc.recommendedSens} (eDPI ${calc.recommendedEdpi}) เพื่อสมดุลการ Flick และการหยุดเป้า`
+    `ปรับมาใช้ Sens แนะนำ ${calc.recommendedSens} (eDPI ${calc.recommendedEdpi}) เพื่อสมดุลการหยุดเป้าและสะบัดยิง`
   );
   tips.push(
-    `แนะนำให้เลือกใช้ 1600 DPI (Sens ${calc.sensAt1600}) เพื่อลด Input Latency ของ Sensor เมาส์และให้เคอร์เซอร์ลื่นไหลที่สุด`
+    `แนะนำให้เลือกใช้ 1600 DPI (Sens ${calc.sensAt1600}) เพื่อลด Sensor Input Latency ของเมาส์ให้ลื่นไหลสูงสุด`
   );
-  tips.push(
-    'ลงซ้อมใน The Range โหมดยิงเป้า 50 ตัว เน้นความแม่นยำ 100% โดยไม่เร่งสะบัดเป็นเวลา 10-15 นาทีก่อนเริ่มแข่งขัน'
-  );
-  tips.push('ใช้ Deathmatch วอร์มกล้ามเนื้อแขน/ข้อมืออย่างน้อย 2 แมตช์ติดต่อกัน 3 วัน เพื่อสร้าง Muscle Memory ใหม่');
+  tips.push('วอร์มมือใน The Range โหมด 50 เป้าหมาย เน้นความแม่นยำ 100% โดยไม่เร่งสะบัด 10 นาทีก่อนลงแรงก์');
+  tips.push('เล่น Deathmatch 2-3 แมตช์ต่อวัน เพื่อให้กล้ามเนื้อจดจำระยะลากของ Sens ใหม่ภายใน 3 วัน');
 
   const headline =
     stats.overshootPct > stats.undershootPct + 15
@@ -185,26 +224,28 @@ export function generateAlgorithmicAnalysis(stats: SensTestStats): SensAiResult 
 
 function buildPrompt(input: SensTestStats): string {
   const edpi = calcEdpi(input.dpi, input.currentSens);
-  const grip = input.gripStyle === 'wrist' ? 'Wrist (ข้อมือ)' : 'Arm (แขน)';
   const calc = calculateRecommendedSens(input);
+  const modeMeta = TEST_MODES[input.testMode];
 
   return [
     `คุณคือโค้ช Aim ประจำทีม Valorant VCT วิเคราะห์สถิติจริง 3 ด่านของนักกีฬา:`,
-    `- ข้อมูลปัจจุบัน: DPI ${input.dpi}, Sens ${input.currentSens} (eDPI ${edpi}), สไตล์การจับ: ${grip}`,
-    `- ด่าน 1 (Flick & Micro-Adjust 15s): แม่นยำ ${input.flickAccuracyPct}%, Overshoot ${input.overshootPct}%, Undershoot ${input.undershootPct}%, เวลาแก้เป้า ${input.avgMicroAdjustMs}ms (ยิงโดน ${input.flickHits}/${input.flickTotalShots})`,
-    `- ด่าน 2 (Smooth Tracking 15s): เกาะเป้า Time on Target ${input.trackingPct}%, ความนิ่งของมือ Stability ${input.stabilityScore}%`,
-    `- ด่าน 3 (Multi-Target Switch 15s): ความเร็วกวาด Sweep Speed ${input.sweepSpeedPxPerSec} px/s, แม่นยำ ${input.switchAccuracyPct}% (${input.switchTargetsHit} เป้า)`,
-    `- ค่าคำนวณสถิติเบื้องต้น: Sens แนะนำ ${calc.recommendedSens} (eDPI ${calc.recommendedEdpi}), สำหรับ 800 DPI คือ ${calc.sensAt800}, สำหรับ 1600 DPI คือ ${calc.sensAt1600}, cm/360 ${calc.cm360} cm`,
+    `- ข้อมูลปัจจุบัน: DPI ${input.dpi}, Sens ${input.currentSens} (eDPI ${edpi})`,
+    `- ระดับเวลาทดสอบ: โหมด ${modeMeta.label} (รวม ${modeMeta.totalDurationSec} วินาที)`,
+    `- ด่าน 1 (Flick & Micro-Adjust): แม่นยำ ${input.flickAccuracyPct}%, Overshoot ${input.overshootPct}%, Undershoot ${input.undershootPct}%, เวลาแก้เป้า ${input.avgMicroAdjustMs}ms (${input.flickHits}/${input.flickTotalShots} เป้า)`,
+    `- ด่าน 2 (Smooth Tracking): เกาะเป้า Time on Target ${input.trackingPct}%, ความนิ่งของมือ Stability ${input.stabilityScore}%`,
+    `- ด่าน 3 (Multi-Target Switch): ความเร็วกวาด Sweep Speed ${input.sweepSpeedPxPerSec} px/s, แม่นยำ ${input.switchAccuracyPct}% (${input.switchTargetsHit} เป้า)`,
+    `- ผลคำนวณเบื้องต้น: Sens แนะนำ ${calc.recommendedSens} (eDPI ${calc.recommendedEdpi}), ตัวเลือก 800 DPI คือ ${calc.sensAt800}, ตัวเลือก 1600 DPI คือ ${calc.sensAt1600}, cm/360 ${calc.cm360} cm, Confidence Score ${calc.confidenceScore}%`,
     `จงตอบกลับด้วย JSON ภาษาไทยเท่านั้น ตามโครงสร้างนี้:`,
     `{`,
     `  "headline": "สรุปผลลัพธ์และคำแนะนำภาพรวมใน 1 ประโยคชัดเจน",`,
+    `  "confidenceScore": ${calc.confidenceScore},`,
     `  "recommendedSens": "${calc.recommendedSens}",`,
     `  "recommendedEdpi": "${calc.recommendedEdpi}",`,
     `  "sensAt800": "${calc.sensAt800}",`,
     `  "sensAt1600": "${calc.sensAt1600}",`,
     `  "cm360": "${calc.cm360}",`,
     `  "strengths": ["จุดเด่นข้อที่ 1 ที่ตรวจพบจาก 3 ด่าน", "จุดเด่นข้อที่ 2"],`,
-    `  "weaknesses": ["จุดด้อยที่ต้องปรับแก้", "จุดที่เสียเปรียบในการดวล"],`,
+    `  "weaknesses": ["จุดด้อยที่ต้องปรับแก้", "จุดที่ทำให้เสียเปรียบในการดวล"],`,
     `  "tips": ["คำแนะนำฝึกซ้อมเพื่อปรับตัวเข้าหา Sens ใหม่", "ข้อแนะนำการเลือก DPI", "ทริคการจับเมาส์หรือฝึกใน The Range"]`,
     `}`,
     `ตอบเฉพาะ JSON ล้วน ห้ามมีข้อความอื่นนอก JSON`,
@@ -240,12 +281,18 @@ function parseSensResponse(rawText: string, fallback: SensAiResult): SensAiResul
       ? data.tips.filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
       : fallback.tips;
 
+    const conf =
+      typeof data.confidenceScore === 'number' && Number.isFinite(data.confidenceScore)
+        ? Math.min(99, Math.max(70, Math.round(data.confidenceScore)))
+        : fallback.confidenceScore;
+
     return {
       recommendedSens: asString(data.recommendedSens, fallback.recommendedSens),
       recommendedEdpi: asString(data.recommendedEdpi, fallback.recommendedEdpi),
       sensAt800: asString(data.sensAt800, fallback.sensAt800),
       sensAt1600: asString(data.sensAt1600, fallback.sensAt1600),
       cm360: asString(data.cm360, fallback.cm360),
+      confidenceScore: conf,
       headline: asString(data.headline, fallback.headline),
       strengths: strengths.length > 0 ? strengths : fallback.strengths,
       weaknesses: weaknesses.length > 0 ? weaknesses : fallback.weaknesses,
@@ -264,7 +311,6 @@ export async function requestSensAnalysis(input: SensTestStats): Promise<SensAiR
     (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : undefined);
 
   if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
-    // ถ้าไม่มี API Key ให้ใช้การวิเคราะห์ตามสูตรสรีรศาสตร์ที่แม่นยำได้ทันที
     return fallback;
   }
 

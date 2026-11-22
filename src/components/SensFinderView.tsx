@@ -4,6 +4,7 @@ import {
   AlertCircle,
   ArrowRight,
   Check,
+  Clock,
   Copy,
   Crosshair,
   Gauge,
@@ -17,6 +18,8 @@ import {
 import {
   SensAiResult,
   SensTestStats,
+  TEST_MODES,
+  TestMode,
   calcCm360,
   calcEdpi,
   calculateRecommendedSens,
@@ -66,7 +69,6 @@ interface FloatingText {
   vy: number;
 }
 
-const STAGE_DURATION_MS = 15_000; // 15 วินาทีต่อด่าน (รวม 45 วินาที)
 const CANVAS_W = 800;
 const CANVAS_H = 450;
 
@@ -74,10 +76,10 @@ export function SensFinderView() {
   const [phase, setPhase] = useState<Phase>('setup');
   const [dpiInput, setDpiInput] = useState('800');
   const [sensInput, setSensInput] = useState('0.35');
-  const [grip, setGrip] = useState<'wrist' | 'arm'>('wrist');
+  const [selectedMode, setSelectedMode] = useState<TestMode>('standard'); // Default Standard (90s)
 
   const [stage, setStage] = useState<TestStage>('flick');
-  const [timeLeft, setTimeLeft] = useState(STAGE_DURATION_MS / 1000);
+  const [timeLeft, setTimeLeft] = useState(TEST_MODES.standard.stageDurationSec);
   const [running, setRunning] = useState(false);
   const [bannerMessage, setBannerMessage] = useState<string | null>(null);
 
@@ -110,16 +112,16 @@ export function SensFinderView() {
   const stageRef = useRef<TestStage>('flick');
   const stageStartTimeRef = useRef(0);
 
-  // Ref สำหรับด่าน 1
+  // Ref ด่าน 1
   const flickTargetRef = useRef<FlickTarget | null>(null);
 
-  // Ref สำหรับด่าน 2
+  // Ref ด่าน 2
   const trackFrameCountRef = useRef(0);
   const onTargetFramesRef = useRef(0);
   const stabilitySamplesRef = useRef<number[]>([]);
   const prevTargetPosRef = useRef({ x: CANVAS_W / 2, y: CANVAS_H / 2 });
 
-  // Ref สำหรับด่าน 3
+  // Ref ด่าน 3
   const switchTargetsRef = useRef<SwitchTarget[]>([]);
   const activeSwitchIndexRef = useRef(0);
   const lastSwitchTimeRef = useRef(0);
@@ -128,12 +130,13 @@ export function SensFinderView() {
   // เอฟเฟกต์ภาพ
   const particlesRef = useRef<Particle[]>([]);
   const floatingTextsRef = useRef<FloatingText[]>([]);
-  const clickFeedbackRef = useRef(0); // timestamp
+  const clickFeedbackRef = useRef(0);
 
   const dpi = Number(dpiInput) || 0;
   const sens = Number(sensInput) || 0;
+  const currentModeMeta = TEST_MODES[selectedMode];
 
-  // รวบรวมสถิติจากทั้ง 3 ด่าน
+  // สรุปสถิติทั้งหมด
   const stats: SensTestStats = useMemo(() => {
     const fHits = flickHits;
     const fTotal = Math.max(fHits, flickTotalShots);
@@ -159,7 +162,8 @@ export function SensFinderView() {
     return {
       dpi,
       currentSens: sens,
-      gripStyle: grip,
+      testMode: selectedMode,
+      testDurationSeconds: currentModeMeta.totalDurationSec,
       flickAccuracyPct,
       overshootPct,
       undershootPct,
@@ -176,7 +180,8 @@ export function SensFinderView() {
   }, [
     dpi,
     sens,
-    grip,
+    selectedMode,
+    currentModeMeta.totalDurationSec,
     flickHits,
     flickTotalShots,
     overshoot,
@@ -189,9 +194,9 @@ export function SensFinderView() {
     switchTotalShots,
   ]);
 
-  // สร้างเป้าด่าน 1 (Flick & Micro-Adjust): เป้าขนาดเล็ก สุ่มตำแหน่ง
+  // สร้างเป้าด่าน 1 (Flick & Micro-Adjust)
   const spawnFlickTarget = useCallback(() => {
-    const radius = 15 + Math.random() * 6; // เป้าเล็ก 15-21 px
+    const radius = 15 + Math.random() * 6; // เป้าสุ่มขนาดเล็ก 15-21 px
     const margin = radius + 40;
     flickTargetRef.current = {
       x: margin + Math.random() * (CANVAS_W - margin * 2),
@@ -205,7 +210,7 @@ export function SensFinderView() {
     };
   }, []);
 
-  // เริ่มด่าน 3 (Multi-Target Switch): 3 เป้ากระจายซ้าย กลาง ขวา
+  // เริ่มด่าน 3 (Multi-Target Switch)
   const initSwitchTargets = useCallback(() => {
     const targets: SwitchTarget[] = [
       { id: 0, x: 130 + Math.random() * 40, y: 190 + Math.random() * 70, radius: 24, label: 'L' },
@@ -219,7 +224,6 @@ export function SensFinderView() {
     lastSwitchPosRef.current = { x: targets[startIdx].x, y: targets[startIdx].y };
   }, []);
 
-  // สร้างอนุภาค Effect
   const addParticles = useCallback((x: number, y: number, color: string, count = 12) => {
     for (let i = 0; i < count; i += 1) {
       const angle = Math.random() * Math.PI * 2;
@@ -254,7 +258,7 @@ export function SensFinderView() {
       stageRef.current = nextStage;
       setStage(nextStage);
       stageStartTimeRef.current = performance.now();
-      setTimeLeft(STAGE_DURATION_MS / 1000);
+      setTimeLeft(currentModeMeta.stageDurationSec);
 
       if (nextStage === 'tracking') {
         setBannerMessage('⚡ เริ่มด่าน 2: Smooth Tracking (เลี้ยงเป้าตามการเคลื่อนที่)');
@@ -263,7 +267,6 @@ export function SensFinderView() {
         stabilitySamplesRef.current = [];
         prevTargetPosRef.current = { x: CANVAS_W / 2, y: CANVAS_H / 2 };
       } else if (nextStage === 'switching') {
-        // ประมวลผลผลลัพธ์ด่าน 2
         const fCount = trackFrameCountRef.current;
         const onTarget = onTargetFramesRef.current;
         const pct = fCount > 0 ? Math.round((onTarget / fCount) * 100) : 50;
@@ -276,13 +279,13 @@ export function SensFinderView() {
             : 75;
         setStabilityScore(stabAvg);
 
-        setBannerMessage('🎯 เริ่มด่าน 3: Multi-Target Switch (กวาดเมาส์สลับเป้าซ้าย-ขวา)');
+        setBannerMessage('🎯 เริ่มด่าน 3: Multi-Target Switch (กวาดเมาส์สลับเป้าซ้าย-กลาง-ขวา)');
         initSwitchTargets();
       }
 
       setTimeout(() => setBannerMessage(null), 2500);
     },
-    [initSwitchTargets]
+    [currentModeMeta.stageDurationSec, initSwitchTargets]
   );
 
   // จบการทดสอบ 3 ด่านทั้งหมด
@@ -290,7 +293,6 @@ export function SensFinderView() {
     setRunning(false);
     setBannerMessage(null);
 
-    // ประมวลผลสถิติด่าน 2 ซ้ำหากยังไม่ได้บันทึก
     const fCount = trackFrameCountRef.current;
     if (fCount > 0) {
       setTrackingPct(Math.round((onTargetFramesRef.current / fCount) * 100));
@@ -309,7 +311,6 @@ export function SensFinderView() {
   const startTest = useCallback(() => {
     if (dpi < 100 || sens <= 0) return;
 
-    // ล้างสถิติเดิม
     setFlickHits(0);
     setFlickTotalShots(0);
     setOvershoot(0);
@@ -333,20 +334,21 @@ export function SensFinderView() {
 
     setStage('flick');
     stageRef.current = 'flick';
-    setTimeLeft(STAGE_DURATION_MS / 1000);
+    setTimeLeft(currentModeMeta.stageDurationSec);
     setPhase('test');
     stageStartTimeRef.current = performance.now();
     spawnFlickTarget();
     setRunning(true);
-    setBannerMessage('🎯 ด่าน 1/3: Flick & Micro-Adjust (ยิงเป้าเล็กและจับจังหวะแก้เป้า)');
+    setBannerMessage('🎯 ด่าน 1/3: Flick & Micro-Adjust (ยิงเป้าสุ่มขนาดเล็ก)');
     setTimeout(() => setBannerMessage(null), 2500);
-  }, [dpi, sens, spawnFlickTarget]);
+  }, [dpi, sens, currentModeMeta.stageDurationSec, spawnFlickTarget]);
 
-  // Game Loop (วาด Canvas และควบคุมเวลาทั้ง 3 ด่าน)
+  // Game Loop
   useEffect(() => {
     if (phase !== 'test' || !running) return;
 
     let lastFrameTime = performance.now();
+    const stageDurationMs = currentModeMeta.stageDurationSec * 1000;
 
     const tick = () => {
       const now = performance.now();
@@ -356,8 +358,8 @@ export function SensFinderView() {
       const elapsed = now - stageStartTimeRef.current;
       const currentStage = stageRef.current;
 
-      // ตรวจสอบการเปลี่ยนด่านอัตโนมัติ (15 วินาทีต่อด่าน)
-      if (elapsed >= STAGE_DURATION_MS) {
+      // ตรวจสอบการเปลี่ยนด่านตามเวลาโหมดที่เลือก
+      if (elapsed >= stageDurationMs) {
         if (currentStage === 'flick') {
           transitionToStage('tracking');
           rafRef.current = requestAnimationFrame(tick);
@@ -374,7 +376,7 @@ export function SensFinderView() {
         }
       }
 
-      setTimeLeft(Math.max(1, Math.ceil((STAGE_DURATION_MS - elapsed) / 1000)));
+      setTimeLeft(Math.max(1, Math.ceil((stageDurationMs - elapsed) / 1000)));
 
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
@@ -383,11 +385,10 @@ export function SensFinderView() {
         return;
       }
 
-      // ล้างพื้นหลังธีมมืด Valorant
       ctx.fillStyle = '#0B0E14';
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-      // เส้นตาราง Tactical Grid จางๆ
+      // Grid background
       ctx.strokeStyle = 'rgba(38, 49, 69, 0.35)';
       ctx.lineWidth = 1;
       for (let x = 40; x < CANVAS_W; x += 40) {
@@ -406,24 +407,17 @@ export function SensFinderView() {
       const cross = crosshairRef.current;
       const prevCross = prevCrosshairRef.current;
 
-      // ==========================================
       // ด่าน 1: Flick & Micro-Adjust
-      // ==========================================
       if (currentStage === 'flick') {
         const target = flickTargetRef.current;
         if (target && !target.hit) {
           const dist = Math.hypot(cross.x - target.x, cross.y - target.y);
-          if (dist < target.minDistToCenter) {
-            target.minDistToCenter = dist;
-          }
+          if (dist < target.minDistToCenter) target.minDistToCenter = dist;
           if (dist < target.radius * 2.5 && !target.firstProximityTime) {
             target.firstProximityTime = now;
           }
-          if (dist < target.radius * 0.4) {
-            target.passedCenter = true;
-          }
+          if (dist < target.radius * 0.4) target.passedCenter = true;
 
-          // วาดเป้าเล็กด่าน 1
           const pulse = 1 + Math.sin(now * 0.008) * 0.06;
           ctx.beginPath();
           ctx.arc(target.x, target.y, target.radius * 2 * pulse, 0, Math.PI * 2);
@@ -438,7 +432,6 @@ export function SensFinderView() {
           ctx.lineWidth = 2;
           ctx.stroke();
 
-          // จุด Bullseye กึ่งกลาง
           ctx.beginPath();
           ctx.arc(target.x, target.y, 4, 0, Math.PI * 2);
           ctx.fillStyle = '#FFFFFF';
@@ -446,12 +439,9 @@ export function SensFinderView() {
         }
       }
 
-      // ==========================================
       // ด่าน 2: Smooth Tracking
-      // ==========================================
       if (currentStage === 'tracking') {
         const t = (now - stageStartTimeRef.current) / 1000;
-        // การเคลื่อนที่แนวนอน-แนวตั้งที่ลื่นไหล สมจริง
         const ttX = CANVAS_W / 2 + Math.sin(t * 1.5) * (CANVAS_W * 0.38) + Math.sin(t * 3.1) * 24;
         const ttY = CANVAS_H / 2 + Math.cos(t * 1.05) * (CANVAS_H * 0.24);
         const radius = 28;
@@ -460,11 +450,8 @@ export function SensFinderView() {
         const isOnTarget = dist <= radius;
 
         trackFrameCountRef.current += 1;
-        if (isOnTarget) {
-          onTargetFramesRef.current += 1;
-        }
+        if (isOnTarget) onTargetFramesRef.current += 1;
 
-        // คำนวณความนิ่งของมือ (Stability): เทียบความเร็วและการกระตุกของเมาส์กับเป้า
         const mouseSpeed = Math.hypot(cross.x - prevCross.x, cross.y - prevCross.y) / dt;
         const targetSpeed =
           Math.hypot(ttX - prevTargetPosRef.current.x, ttY - prevTargetPosRef.current.y) / dt;
@@ -472,14 +459,12 @@ export function SensFinderView() {
 
         if (isOnTarget) {
           const speedDiff = Math.abs(mouseSpeed - targetSpeed);
-          // ถ้าเกาะเป้าและสปีดสอดคล้องกัน ให้คะแนน 80-98, ถ้ากระตุกสั่น ลดคะแนนลง
           const frameStability = Math.max(30, Math.min(100, 100 - speedDiff * 0.08));
           stabilitySamplesRef.current.push(frameStability);
         } else if (dist < radius * 2) {
           stabilitySamplesRef.current.push(55);
         }
 
-        // วาดวงกลมเป้าหมาย Tracking
         ctx.beginPath();
         ctx.arc(ttX, ttY, radius, 0, Math.PI * 2);
         ctx.fillStyle = isOnTarget ? 'rgba(52, 211, 153, 0.3)' : 'rgba(34, 211, 238, 0.16)';
@@ -488,14 +473,12 @@ export function SensFinderView() {
         ctx.lineWidth = isOnTarget ? 3 : 2;
         ctx.stroke();
 
-        // วงแหวน Pulse ภายใน
         ctx.beginPath();
         ctx.arc(ttX, ttY, radius * 0.45, 0, Math.PI * 2);
         ctx.strokeStyle = isOnTarget ? 'rgba(52, 211, 153, 0.8)' : 'rgba(34, 211, 238, 0.6)';
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
-        // แสดงข้อความบอกสถานะเกาะเป้า
         if (isOnTarget) {
           ctx.fillStyle = '#34D399';
           ctx.font = 'bold 10px monospace';
@@ -503,9 +486,7 @@ export function SensFinderView() {
         }
       }
 
-      // ==========================================
       // ด่าน 3: Multi-Target Switch
-      // ==========================================
       if (currentStage === 'switching') {
         const targets = switchTargetsRef.current;
         const activeIdx = activeSwitchIndexRef.current;
@@ -515,7 +496,6 @@ export function SensFinderView() {
           const isActive = i === activeIdx;
 
           if (isActive) {
-            // เป้า Active: สีทอง/ส้ม นีออน สว่างและขยายกว้าง
             const pulse = 1 + Math.sin(now * 0.012) * 0.1;
             ctx.beginPath();
             ctx.arc(tgt.x, tgt.y, tgt.radius * 1.6 * pulse, 0, Math.PI * 2);
@@ -530,7 +510,6 @@ export function SensFinderView() {
             ctx.lineWidth = 3;
             ctx.stroke();
 
-            // Reticle สี่เหลี่ยมล็อกเป้า
             const bracketSize = tgt.radius + 6;
             ctx.strokeStyle = '#FDE68A';
             ctx.lineWidth = 1.5;
@@ -541,7 +520,6 @@ export function SensFinderView() {
             ctx.textAlign = 'center';
             ctx.fillText('SHOOT', tgt.x, tgt.y + 4);
           } else {
-            // เป้า Standby
             ctx.beginPath();
             ctx.arc(tgt.x, tgt.y, tgt.radius, 0, Math.PI * 2);
             ctx.fillStyle = 'rgba(71, 85, 105, 0.18)';
@@ -558,7 +536,7 @@ export function SensFinderView() {
         }
       }
 
-      // วาด Particles ระเบิด
+      // Particles
       const remainingParticles: Particle[] = [];
       for (const p of particlesRef.current) {
         p.x += p.vx * dt;
@@ -576,7 +554,7 @@ export function SensFinderView() {
       }
       particlesRef.current = remainingParticles;
 
-      // วาด Floating Texts (คะแนน / สปีด)
+      // Floating Texts
       const remainingTexts: FloatingText[] = [];
       for (const ft of floatingTextsRef.current) {
         ft.y += ft.vy * dt;
@@ -593,14 +571,18 @@ export function SensFinderView() {
       }
       floatingTextsRef.current = remainingTexts;
 
-      // ==========================================
+      // HUD: แสดงตัวคูณ Sens จำลอง
+      const sensMultiplier = sens > 0 ? (sens / 0.35).toFixed(2) : '1.00';
+      ctx.fillStyle = 'rgba(148, 163, 184, 0.6)';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(`Sens Factor: ${sensMultiplier}x (0.35 = 1.0x)`, CANVAS_W - 12, CANVAS_H - 12);
+
       // วาดเป้าเล็ง Crosshair (+) ตามปลายเมาส์จริงทันที
-      // ==========================================
       const isClicked = now - clickFeedbackRef.current < 90;
       const crosshairColor = isClicked ? '#F87171' : '#00FF66';
       const crossSize = isClicked ? 12 : 10;
 
-      // เงาเส้นขอบดำเพื่อความคมชัดบนทุกฉากหลัง
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
       ctx.lineWidth = 3.5;
       ctx.beginPath();
@@ -610,7 +592,6 @@ export function SensFinderView() {
       ctx.lineTo(cross.x, cross.y + crossSize);
       ctx.stroke();
 
-      // เส้น Crosshair หลักสีเขียวนีออน Valorant
       ctx.strokeStyle = crosshairColor;
       ctx.lineWidth = 1.8;
       ctx.beginPath();
@@ -620,7 +601,6 @@ export function SensFinderView() {
       ctx.lineTo(cross.x, cross.y + crossSize);
       ctx.stroke();
 
-      // จุด Dot ตรงกลาง
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(cross.x - 1, cross.y - 1, 2, 2);
 
@@ -630,21 +610,38 @@ export function SensFinderView() {
 
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [phase, running, transitionToStage, finishAllStages]);
+  }, [phase, running, currentModeMeta.stageDurationSec, transitionToStage, finishAllStages, sens]);
 
-  // จับพิกัดเมาส์ตรงผ่าน onMouseMove + getBoundingClientRect() ไม่มี Pointer Lock
-  const updateCrosshairPos = useCallback((clientX: number, clientY: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    const scaleX = CANVAS_W / rect.width;
-    const scaleY = CANVAS_H / rect.height;
-    crosshairRef.current = {
-      x: Math.max(0, Math.min(CANVAS_W, (clientX - rect.left) * scaleX)),
-      y: Math.max(0, Math.min(CANVAS_H, (clientY - rect.top) * scaleY)),
-    };
-  }, []);
+  // ระบบควบคุมเมาส์และจำลองความไวจริงบน Canvas
+  // คำนวณเป็นตัวคูณความเร็วของเป้า + เทียบกับศูนย์กลาง Canvas (เทียบมาตรฐาน Sens 0.35 = 1.0x)
+  const updateCrosshairPos = useCallback(
+    (clientX: number, clientY: number) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const scaleX = CANVAS_W / rect.width;
+      const scaleY = CANVAS_H / rect.height;
+
+      // พิกัดเมาส์จริงบน Canvas
+      const rawX = (clientX - rect.left) * scaleX;
+      const rawY = (clientY - rect.top) * scaleY;
+
+      // จำลองความเร็วตาม Sens จริงเทียบกับศูนย์กลาง Canvas (Sens 0.35 = 1.0x)
+      const centerX = CANVAS_W / 2;
+      const centerY = CANVAS_H / 2;
+      const sensMultiplier = sens > 0 ? sens / 0.35 : 1.0;
+
+      const simX = centerX + (rawX - centerX) * sensMultiplier;
+      const simY = centerY + (rawY - centerY) * sensMultiplier;
+
+      crosshairRef.current = {
+        x: Math.max(0, Math.min(CANVAS_W, simX)),
+        y: Math.max(0, Math.min(CANVAS_H, simY)),
+      };
+    },
+    [sens]
+  );
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -653,7 +650,7 @@ export function SensFinderView() {
     [updateCrosshairPos]
   );
 
-  // จัดการการคลิกยิงของแต่ละด่าน
+  // คลิกยิงเป้าหมาย
   const handleCanvasClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (phase !== 'test') return;
@@ -663,7 +660,7 @@ export function SensFinderView() {
       const currentStage = stageRef.current;
       const now = performance.now();
 
-      // ด่าน 1: Flick & Micro-Adjust
+      // ด่าน 1: Flick
       if (currentStage === 'flick') {
         const target = flickTargetRef.current;
         if (!target) return;
@@ -672,17 +669,14 @@ export function SensFinderView() {
         const dist = Math.hypot(cross.x - target.x, cross.y - target.y);
 
         if (dist <= target.radius) {
-          // ยิงโดนเป้า!
           target.hit = true;
           setFlickHits((prev) => prev + 1);
 
-          // คำนวณเวลาแก้เป้า (Micro-adjust time)
           const microTime = target.firstProximityTime
             ? Math.round(now - target.firstProximityTime)
             : Math.round(now - target.spawnTime);
           setMicroAdjustTimes((prev) => [...prev, Math.max(60, microTime)]);
 
-          // ตรวจสอบ Overshoot vs Undershoot
           if (target.passedCenter && target.minDistToCenter < target.radius * 0.4) {
             setOvershoot((prev) => prev + 1);
             addFloatingText(target.x, target.y - 12, 'OVERSHOOT', '#FBBF24');
@@ -694,12 +688,11 @@ export function SensFinderView() {
           addParticles(target.x, target.y, '#FF4655', 16);
           spawnFlickTarget();
         } else {
-          // ยิงพลาด
           addFloatingText(cross.x, cross.y - 10, 'MISS', '#F87171');
         }
       }
 
-      // ด่าน 3: Multi-Target Switch
+      // ด่าน 3: Switch
       if (currentStage === 'switching') {
         const targets = switchTargetsRef.current;
         const activeIdx = activeSwitchIndexRef.current;
@@ -710,11 +703,9 @@ export function SensFinderView() {
         const dist = Math.hypot(cross.x - activeTarget.x, cross.y - activeTarget.y);
 
         if (dist <= activeTarget.radius * 1.25) {
-          // ยิงโดนเป้า Active!
           setSwitchHits((prev) => prev + 1);
           addParticles(activeTarget.x, activeTarget.y, '#FBBF24', 18);
 
-          // คำนวณ Sweep Speed (px/s) จากเป้าเดิมมายังเป้านี้
           const sweepDist = Math.hypot(
             activeTarget.x - lastSwitchPosRef.current.x,
             activeTarget.y - lastSwitchPosRef.current.y
@@ -724,17 +715,15 @@ export function SensFinderView() {
           setSweepSpeeds((prev) => [...prev, speed]);
           addFloatingText(activeTarget.x, activeTarget.y - 15, `${speed} px/s`, '#FDE68A');
 
-          // สลับไปยังเป้าใหม่ (เน้นสลับข้ามฝั่ง L <-> R เพื่อวัดการกวาดเมาส์กว้าง)
           lastSwitchPosRef.current = { x: activeTarget.x, y: activeTarget.y };
           lastSwitchTimeRef.current = now;
 
           const remainingIndices = [0, 1, 2].filter((i) => i !== activeIdx);
-          // ถ้าเดิมอยู่ริม ให้สลับไปอีกฝั่ง
           const nextIdx =
             activeIdx === 0
-              ? remainingIndices[1] // สลับไปขวา
+              ? remainingIndices[1]
               : activeIdx === 2
-              ? remainingIndices[0] // สลับไปซ้าย
+              ? remainingIndices[0]
               : remainingIndices[Math.floor(Math.random() * remainingIndices.length)];
 
           activeSwitchIndexRef.current = nextIdx;
@@ -750,11 +739,9 @@ export function SensFinderView() {
   useEffect(() => {
     if (phase !== 'result') return;
 
-    // คำนวณเบื้องต้นทันที
     const initialAnalysis = generateAlgorithmicAnalysis(stats);
     setAiResult(initialAnalysis);
 
-    // ส่งให้ Gemini AI วิเคราะห์เจาะลึก
     let cancelled = false;
     setAiLoading(true);
     setAiError(null);
@@ -777,7 +764,6 @@ export function SensFinderView() {
     };
   }, [phase, stats]);
 
-  // ขอวิเคราะห์ซ้ำด้วยตนเอง
   const handleReAnalyze = useCallback(async () => {
     setAiLoading(true);
     setAiError(null);
@@ -791,7 +777,6 @@ export function SensFinderView() {
     }
   }, [stats]);
 
-  // คัดลอกค่า Sens
   const copyToClipboard = useCallback((val: string, key: string) => {
     navigator.clipboard.writeText(val);
     setCopiedKey(key);
@@ -816,19 +801,20 @@ export function SensFinderView() {
             </span>
           </div>
           <p className="mt-1 text-sm text-[#94A3B8]">
-            ทดสอบ 3 ด่านต่อเนื่อง (Flick &bull; Smooth Tracking &bull; Multi-Target Switch) แล้วให้ AI คำนวณ Sens ที่เหมาะกับมือคุณที่สุด
+            ทดสอบ 3 ด่านต่อเนื่อง (Flick &bull; Tracking &bull; Switch) พร้อมระบบจำลองความไวจริงบน Canvas เพื่อหา Sens ที่เหมาะสมที่สุด
           </p>
         </div>
 
-        {/* ขั้นตอน 1: ค่าปัจจุบัน */}
-        <section className="space-y-3 border border-[#263145] bg-[#111620] p-4">
+        {/* ขั้นตอน 1: Setup แบบรวดเร็ว (เฉพาะ DPI, Sens และเลือกระดับเวลา) */}
+        <section className="space-y-4 border border-[#263145] bg-[#111620] p-4 lg:p-5">
           <h2 className="flex items-center gap-2 text-sm font-bold text-[#FBBF24]">
             <MousePointer2 className="h-4 w-4" />
-            ขั้นตอน 1 · ค่าปัจจุบันของคุณ
+            ขั้นตอน 1 · ตั้งค่าเริ่มต้น (Setup แบบรวดเร็ว)
           </h2>
-          <div className="grid gap-3 sm:grid-cols-3">
+
+          <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5">
-              <span className="text-xs text-[#94A3B8]">DPI ของเมาส์</span>
+              <span className="text-xs font-semibold text-[#CBD5E1]">DPI ปัจจุบันของเมาส์</span>
               <input
                 type="number"
                 min={100}
@@ -837,11 +823,12 @@ export function SensFinderView() {
                 value={dpiInput}
                 disabled={phase === 'test'}
                 onChange={(e) => setDpiInput(e.target.value)}
-                className="w-full border border-[#263145] bg-[#0B0E14] px-3 py-2 text-sm text-[#F1F5F9] focus:border-[#FF4655] focus:outline-none disabled:opacity-50"
+                placeholder="เช่น 800 หรือ 1600"
+                className="w-full border border-[#263145] bg-[#0B0E14] px-3.5 py-2.5 text-sm font-medium text-[#F1F5F9] focus:border-[#FF4655] focus:outline-none disabled:opacity-50"
               />
             </label>
             <label className="space-y-1.5">
-              <span className="text-xs text-[#94A3B8]">Sens ในเกม Valorant</span>
+              <span className="text-xs font-semibold text-[#CBD5E1]">Sens ในเกม Valorant ปัจจุบัน</span>
               <input
                 type="number"
                 min={0.05}
@@ -850,49 +837,79 @@ export function SensFinderView() {
                 value={sensInput}
                 disabled={phase === 'test'}
                 onChange={(e) => setSensInput(e.target.value)}
-                className="w-full border border-[#263145] bg-[#0B0E14] px-3 py-2 text-sm text-[#F1F5F9] focus:border-[#FF4655] focus:outline-none disabled:opacity-50"
+                placeholder="เช่น 0.35"
+                className="w-full border border-[#263145] bg-[#0B0E14] px-3.5 py-2.5 text-sm font-medium text-[#F1F5F9] focus:border-[#FF4655] focus:outline-none disabled:opacity-50"
               />
             </label>
-            <div className="space-y-1.5">
-              <span className="text-xs text-[#94A3B8]">สไตล์การลากเมาส์</span>
-              <div className="flex">
-                {(['wrist', 'arm'] as const).map((g) => (
+          </div>
+
+          {dpi > 0 && sens > 0 && (
+            <div className="flex flex-wrap items-center gap-4 text-xs text-[#64748B] border-t border-[#263145] pt-2.5">
+              <span>
+                eDPI ปัจจุบัน: <strong className="text-[#CBD5E1]">{edpiNow}</strong>
+              </span>
+              <span>
+                cm/360: <strong className="text-[#CBD5E1]">{cm360Now} ซม.</strong>
+              </span>
+              <span>
+                ตัวคูณจำลองบน Canvas:{' '}
+                <strong className="text-[#34D399]">{(sens / 0.35).toFixed(2)}x</strong> (เทียบเคียง Sens 0.35 = 1.0x)
+              </span>
+            </div>
+          )}
+
+          {/* ปุ่มเลือกระดับเวลาการเทส 3 ระดับ */}
+          <div className="space-y-2 pt-1">
+            <span className="text-xs font-semibold text-[#CBD5E1]">เลือกระดับเวลาการทดสอบ</span>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {(Object.keys(TEST_MODES) as TestMode[]).map((modeKey) => {
+                const meta = TEST_MODES[modeKey];
+                const isSelected = selectedMode === modeKey;
+                return (
                   <button
-                    key={g}
+                    key={modeKey}
                     type="button"
                     disabled={phase === 'test'}
-                    onClick={() => setGrip(g)}
-                    className={`flex-1 border px-3 py-2 text-xs font-semibold transition-colors disabled:opacity-50 ${
-                      grip === g
-                        ? 'border-[#FF4655] bg-[#FF4655]/15 text-[#F1F5F9]'
-                        : 'border-[#263145] bg-[#0B0E14] text-[#94A3B8] hover:text-[#F1F5F9]'
+                    onClick={() => setSelectedMode(modeKey)}
+                    className={`flex flex-col items-start p-3 border text-left transition-all disabled:opacity-50 ${
+                      isSelected
+                        ? 'border-[#FBBF24] bg-[#FBBF24]/10 shadow-sm'
+                        : 'border-[#263145] bg-[#0B0E14] hover:border-[#475569]'
                     }`}
                   >
-                    {g === 'wrist' ? 'Wrist (ข้อมือ)' : 'Arm (แขน)'}
+                    <div className="flex w-full items-center justify-between">
+                      <span className={`text-xs font-bold ${isSelected ? 'text-[#FBBF24]' : 'text-[#F1F5F9]'}`}>
+                        {meta.label}
+                      </span>
+                      <span
+                        className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                          isSelected
+                            ? 'bg-[#FBBF24]/20 text-[#FBBF24]'
+                            : 'bg-[#263145] text-[#94A3B8]'
+                        }`}
+                      >
+                        {meta.badge}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] leading-relaxed text-[#94A3B8]">{meta.description}</p>
                   </button>
-                ))}
-              </div>
+                );
+              })}
             </div>
           </div>
-          {dpi > 0 && sens > 0 && (
-            <p className="text-xs text-[#64748B]">
-              eDPI ปัจจุบัน: <span className="font-semibold text-[#CBD5E1]">{edpiNow}</span> ·
-              cm/360: <span className="font-semibold text-[#CBD5E1]">{cm360Now} ซม.</span>
-            </p>
-          )}
         </section>
 
         {/* ขั้นตอน 2: มินิเกม 3 ด่านต่อเนื่อง */}
-        <section className="space-y-3 border border-[#263145] bg-[#111620] p-4">
+        <section className="space-y-3 border border-[#263145] bg-[#111620] p-4 lg:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="flex items-center gap-2 text-sm font-bold text-[#FBBF24]">
               <Timer className="h-4 w-4" />
-              ขั้นตอน 2 · มินิเกมทดสอบ 3 ด่านต่อเนื่อง (15 วิ x 3 ด่าน = 45 วินาที)
+              ขั้นตอน 2 · มินิเกมทดสอบ 3 ด่านต่อเนื่อง (โหมด {currentModeMeta.label})
             </h2>
             {phase === 'test' && (
               <span className="flex items-center gap-1.5 border border-[#34D399]/40 bg-[#34D399]/10 px-2 py-0.5 text-xs font-bold text-[#34D399]">
                 <Activity className="h-3 w-3 animate-pulse" />
-                กำลังทดสอบ: {stage === 'flick' ? 'ด่าน 1 Flick' : stage === 'tracking' ? 'ด่าน 2 Tracking' : 'ด่าน 3 Switch'} ({timeLeft}s)
+                {stage === 'flick' ? 'ด่าน 1 Flick' : stage === 'tracking' ? 'ด่าน 2 Tracking' : 'ด่าน 3 Switch'} ({timeLeft}s)
               </span>
             )}
           </div>
@@ -901,21 +918,27 @@ export function SensFinderView() {
             <div className="space-y-3">
               <div className="grid gap-2 sm:grid-cols-3">
                 <div className="border border-[#263145] bg-[#0B0E14] p-3">
-                  <div className="text-xs font-bold text-[#FF4655]">ด่าน 1 (15s) · Flick &amp; Micro-Adjust</div>
+                  <div className="text-xs font-bold text-[#FF4655]">
+                    ด่าน 1 ({currentModeMeta.stageDurationSec}s) · Flick &amp; Micro-Adjust
+                  </div>
                   <div className="mt-1 text-[11px] leading-relaxed text-[#94A3B8]">
-                    ยิงเป้าสุ่มขนาดเล็ก วัดค่า Overshoot %, Undershoot % และความเร็วในการแก้เป้า
+                    ยิงเป้าสุ่มขนาดเล็ก วัดค่า Overshoot %, Undershoot % และเวลาแก้เป้า
                   </div>
                 </div>
                 <div className="border border-[#263145] bg-[#0B0E14] p-3">
-                  <div className="text-xs font-bold text-[#22D3EE]">ด่าน 2 (15s) · Smooth Tracking</div>
+                  <div className="text-xs font-bold text-[#22D3EE]">
+                    ด่าน 2 ({currentModeMeta.stageDurationSec}s) · Smooth Tracking
+                  </div>
                   <div className="mt-1 text-[11px] leading-relaxed text-[#94A3B8]">
-                    เลี้ยงเป้าตามวงกลมเคลื่อนที่ วัดค่า Time on Target (%) และความนิ่งของมือ
+                    เลี้ยงเป้าตามวงกลมเคลื่อนที่ซ้าย-ขวา วัด Time on Target (%) และความนิ่ง
                   </div>
                 </div>
                 <div className="border border-[#263145] bg-[#0B0E14] p-3">
-                  <div className="text-xs font-bold text-[#FBBF24]">ด่าน 3 (15s) · Multi-Target Switch</div>
+                  <div className="text-xs font-bold text-[#FBBF24]">
+                    ด่าน 3 ({currentModeMeta.stageDurationSec}s) · Multi-Target Switch
+                  </div>
                   <div className="mt-1 text-[11px] leading-relaxed text-[#94A3B8]">
-                    ยิงเป้าสลับข้ามจอกว้างซ้าย-ขวา วัดความเร็วกวาดเมาส์ (Sweep Speed)
+                    ยิงเป้าสลับซ้าย-กลาง-ขวา วัดความเร็วกวาดเมาส์ (Sweep Speed)
                   </div>
                 </div>
               </div>
@@ -927,14 +950,14 @@ export function SensFinderView() {
                 className="flex items-center gap-2 bg-[#FF4655] px-6 py-3 text-sm font-bold text-white transition-all hover:bg-[#E03545] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Crosshair className="h-4 w-4" />
-                เริ่มทดสอบ 3 ด่านต่อเนื่อง (45 วินาที)
+                เริ่มทดสอบ 3 ด่านต่อเนื่อง ({currentModeMeta.totalDurationSec} วินาที)
               </button>
             </div>
           )}
 
           {phase === 'test' && (
             <div className="space-y-2">
-              {/* แถบ Progress 3 ด่าน */}
+              {/* แถบสถานะ 3 ด่าน */}
               <div className="grid grid-cols-3 gap-1.5 text-center text-xs">
                 <div
                   className={`border py-1.5 font-bold transition-all ${
@@ -965,14 +988,13 @@ export function SensFinderView() {
                 </div>
               </div>
 
-              {/* ข้อความแจ้งเตือนเปลี่ยนด่าน */}
               {bannerMessage && (
                 <div className="border border-[#FBBF24]/60 bg-[#FBBF24]/15 px-3 py-1.5 text-center text-xs font-bold text-[#FBBF24] animate-pulse">
                   {bannerMessage}
                 </div>
               )}
 
-              {/* Canvas มินิเกม */}
+              {/* Canvas พร้อม cursor: none และระบบจำลองความไวจริง */}
               <canvas
                 ref={canvasRef}
                 width={CANVAS_W}
@@ -985,11 +1007,10 @@ export function SensFinderView() {
                 aria-label="พื้นที่ทดสอบมินิเกมเล็งเป้า"
               />
 
-              {/* สถานะสด */}
               <div className="flex flex-wrap items-center justify-between text-xs text-[#94A3B8]">
                 <span>
-                  {stage === 'flick' && `ยิงเป้าเล็กแดง | โดน: ${flickHits} | แม่น: ${stats.flickAccuracyPct}%`}
-                  {stage === 'tracking' && `เลี้ยงเป้าในวงกลม | เกาะเป้า: ${stats.trackingPct}% | นิ่ง: ${stats.stabilityScore}%`}
+                  {stage === 'flick' && `ยิงเป้าสุ่มขนาดเล็ก | โดน: ${flickHits} | แม่น: ${stats.flickAccuracyPct}%`}
+                  {stage === 'tracking' && `เลี้ยงเป้าตามการเคลื่อนที่ | เกาะเป้า: ${stats.trackingPct}% | ความนิ่ง: ${stats.stabilityScore}%`}
                   {stage === 'switching' && `กวาดเมาส์ยิงเป้า ACTIVE สีส้ม | โดน: ${switchHits} เป้า`}
                 </span>
                 <span className="font-mono-tabular font-bold text-[#F1F5F9]">
@@ -1001,7 +1022,6 @@ export function SensFinderView() {
 
           {phase === 'result' && (
             <div className="space-y-4">
-              {/* แถบสรุปผลลัพธ์ด่านทั้ง 3 ด่าน */}
               <div className="grid gap-3 sm:grid-cols-3">
                 {/* ด่าน 1 */}
                 <div className="border border-[#FF4655]/40 bg-[#0B0E14] p-3">
@@ -1058,7 +1078,7 @@ export function SensFinderView() {
                     </div>
                   </div>
                   <p className="mt-2 text-[10px] text-[#64748B]">
-                    วัดจากความเนียนในการเกาะเป้าและการลดแรงสั่นของกล้ามเนื้อ
+                    วัดจากความเนียนในการเลี้ยงเป้าตามวงกลมเคลื่อนที่
                   </p>
                 </div>
 
@@ -1099,25 +1119,35 @@ export function SensFinderView() {
           )}
         </section>
 
-        {/* ขั้นตอน 3: สรุปผลลัพธ์และคำนวณ Sens/DPI + AI Coach */}
+        {/* ขั้นตอน 3: สรุปผลลัพธ์และวิเคราะห์โดย AI */}
         {phase === 'result' && (
           <section className="space-y-4 border border-[#FBBF24]/50 bg-[#111620] p-4 lg:p-5">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#263145] pb-3">
               <div>
-                <h2 className="flex items-center gap-2 text-base font-bold text-[#FBBF24]">
-                  <Wand2 className="h-5 w-5" />
-                  ขั้นตอน 3 · ผลวิเคราะห์ Sens &amp; DPI ที่เหมาะสมที่สุด
-                </h2>
-                <p className="text-xs text-[#94A3B8]">
-                  คำนวณจากสถิติจริงทั้ง 3 ด่าน (Flick &bull; Tracking &bull; Switch) ผสานการวิเคราะห์จาก Gemini 3.8 Flash
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-[#FBBF24] flex items-center gap-2">
+                    <Wand2 className="h-5 w-5" />
+                    ขั้นตอน 3 · ผลวิเคราะห์ Sens &amp; DPI ที่เหมาะสมที่สุด
+                  </h2>
+                  <span className="border border-[#FBBF24]/40 bg-[#FBBF24]/10 px-2 py-0.5 text-[10px] font-bold text-[#FBBF24]">
+                    โหมด {currentModeMeta.label}
+                  </span>
+                </div>
+                <p className="text-xs text-[#94A3B8] mt-0.5">
+                  วิเคราะห์จากสถิติจริงทั้ง 3 ด่าน + เวลาทดสอบ {currentModeMeta.totalDurationSec} วินาที ด้วย Gemini 3.8 Flash
                 </p>
               </div>
-              {aiLoading && (
-                <span className="flex items-center gap-1.5 text-xs text-[#FBBF24] animate-pulse">
-                  <Wand2 className="h-3.5 w-3.5 animate-spin" />
-                  Gemini AI กำลังวิเคราะห์...
-                </span>
-              )}
+
+              {/* Confidence Score Badge */}
+              <div className="flex items-center gap-2 border border-[#34D399]/40 bg-[#34D399]/10 px-3 py-1.5">
+                <ShieldCheck className="h-4 w-4 text-[#34D399]" />
+                <div className="text-left">
+                  <div className="text-[10px] font-medium text-[#94A3B8]">Confidence Score</div>
+                  <div className="text-xs font-bold text-[#34D399]">
+                    ความแม่นยำการประเมิน {aiResult?.confidenceScore ?? calculated.confidenceScore}%
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* การ์ดค่าที่แนะนำหลัก */}
@@ -1152,7 +1182,7 @@ export function SensFinderView() {
                   {aiResult?.recommendedEdpi ?? calculated.recommendedEdpi}
                 </div>
                 <div className="mt-1 text-[11px] text-[#94A3B8]">
-                  เดิม: <span className="text-[#F1F5F9]">{edpiNow}</span> ({grip === 'wrist' ? 'ข้อมือ' : 'แขน'})
+                  เดิม: <span className="text-[#F1F5F9]">{edpiNow}</span>
                 </div>
               </div>
 
@@ -1172,7 +1202,6 @@ export function SensFinderView() {
                 ทางเลือกการตั้งค่าตาม DPI มาตรฐาน (800 / 1600 DPI)
               </h3>
               <div className="grid gap-3 sm:grid-cols-2">
-                {/* ตัวเลือก 800 DPI */}
                 <div className="flex items-center justify-between border border-[#263145] bg-[#111620] p-3">
                   <div>
                     <div className="text-xs font-bold text-[#F1F5F9]">หากใช้เมาส์ 800 DPI</div>
@@ -1195,7 +1224,6 @@ export function SensFinderView() {
                   </button>
                 </div>
 
-                {/* ตัวเลือก 1600 DPI */}
                 <div className="flex items-center justify-between border border-[#34D399]/40 bg-[#111620] p-3">
                   <div>
                     <div className="flex items-center gap-1.5 text-xs font-bold text-[#34D399]">
@@ -1229,14 +1257,21 @@ export function SensFinderView() {
             {aiResult && (
               <div className="space-y-3 pt-1">
                 <div className="rounded border border-[#263145] bg-[#0B0E14] p-3">
-                  <div className="flex items-center gap-2 text-xs font-bold text-[#FBBF24]">
-                    <Zap className="h-4 w-4" />
-                    บทสรุปภาพรวมจากโค้ช
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-2 text-xs font-bold text-[#FBBF24]">
+                      <Zap className="h-4 w-4" />
+                      บทสรุปภาพรวมจากโค้ช AI
+                    </span>
+                    {aiLoading && (
+                      <span className="flex items-center gap-1 text-[11px] text-[#FBBF24] animate-pulse">
+                        <Wand2 className="h-3 w-3 animate-spin" />
+                        AI กำลังปรับปรุงผลวิเคราะห์...
+                      </span>
+                    )}
                   </div>
                   <p className="mt-1 text-sm font-semibold text-[#F1F5F9]">{aiResult.headline}</p>
                 </div>
 
-                {/* จุดเด่น & จุดด้อย */}
                 <div className="grid gap-3 sm:grid-cols-2">
                   {/* จุดเด่น */}
                   <div className="space-y-2 border border-[#34D399]/40 bg-[#0B0E14] p-3.5">
@@ -1254,7 +1289,7 @@ export function SensFinderView() {
                     </ul>
                   </div>
 
-                  {/* จุดด้อยที่ต้องระวัง */}
+                  {/* จุดด้อย */}
                   <div className="space-y-2 border border-[#F87171]/40 bg-[#0B0E14] p-3.5">
                     <h4 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#F87171]">
                       <AlertCircle className="h-4 w-4" />
@@ -1292,7 +1327,6 @@ export function SensFinderView() {
               </div>
             )}
 
-            {/* Error หรือแจ้งเตือน AI */}
             {aiError && (
               <div className="border border-[#F87171]/50 bg-[#F87171]/10 px-3 py-2 text-xs text-[#FCA5A5]">
                 {aiError} (แสดงผลด้วยสูตรคำนวณสถิติแม่นยำแทน)
