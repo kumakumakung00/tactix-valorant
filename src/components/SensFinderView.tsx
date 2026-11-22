@@ -28,6 +28,7 @@ import {
 } from '../services/sensAi';
 
 type Phase = 'setup' | 'test' | 'result';
+type FullscreenState = 'none' | 'active' | 'fallback';
 type TestStage = 'flick' | 'tracking' | 'switching';
 
 interface FlickTarget {
@@ -106,6 +107,9 @@ export function SensFinderView() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const gameAreaRef = useRef<HTMLDivElement | null>(null);
+  const [fullscreenState, setFullscreenState] = useState<FullscreenState>('none');
+  const [waitingForClickToStart, setWaitingForClickToStart] = useState(false);
   const crosshairRef = useRef({ x: CANVAS_W / 2, y: CANVAS_H / 2 });
   const prevCrosshairRef = useRef({ x: CANVAS_W / 2, y: CANVAS_H / 2 });
   const rafRef = useRef<number>(0);
@@ -304,6 +308,13 @@ export function SensFinderView() {
       );
     }
 
+    // ออกจาก Fullscreen ก่อนแสดงหน้าสรุปผล
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    setFullscreenState('none');
+    setWaitingForClickToStart(false);
+
     setPhase('result');
   }, []);
 
@@ -335,17 +346,157 @@ export function SensFinderView() {
     setStage('flick');
     stageRef.current = 'flick';
     setTimeLeft(currentModeMeta.stageDurationSec);
+    stageStartTimeRef.current = 0; // จะเริ่มนับเมื่อผู้ใช้คลิกเป้าแรก
+
+    // วางเป้าแรกตรงกลางสำหรับ Click-to-Start
+    flickTargetRef.current = {
+      x: CANVAS_W / 2,
+      y: CANVAS_H / 2,
+      radius: 36,
+      spawnTime: performance.now(),
+      hit: false,
+      passedCenter: false,
+      minDistToCenter: Infinity,
+      firstProximityTime: undefined,
+    };
+
+    setWaitingForClickToStart(true);
+    setRunning(false); // ยังไม่เริ่ม loop
     setPhase('test');
-    stageStartTimeRef.current = performance.now();
-    spawnFlickTarget();
-    setRunning(true);
-    setBannerMessage('🎯 ด่าน 1/3: Flick & Micro-Adjust (ยิงเป้าสุ่มขนาดเล็ก)');
-    setTimeout(() => setBannerMessage(null), 2500);
-  }, [dpi, sens, currentModeMeta.stageDurationSec, spawnFlickTarget]);
+    setBannerMessage(null);
+
+    // เข้า Fullscreen
+    const el = gameAreaRef.current;
+    if (el) {
+      el.requestFullscreen().then(() => {
+        setFullscreenState('active');
+      }).catch(() => {
+        // เบราว์เซอร์บล็อก Fullscreen → ใช้ CSS fallback
+        setFullscreenState('fallback');
+      });
+    } else {
+      setFullscreenState('fallback');
+    }
+  }, [dpi, sens, currentModeMeta.stageDurationSec]);
+
+  // ยกเลิกและออกจาก Fullscreen
+  const handleCancelTest = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    setFullscreenState('none');
+    setWaitingForClickToStart(false);
+    setRunning(false);
+    setPhase('setup');
+    setBannerMessage(null);
+  }, []);
+
+  // ติดตามการเปลี่ยนแปลง Fullscreen จากภายนอก (เช่น กด ESC ของเบราว์เซอร์)
+  useEffect(() => {
+    const onFSChange = () => {
+      if (!document.fullscreenElement) {
+        setFullscreenState((prev) => (prev === 'active' ? 'none' : prev));
+      }
+    };
+    document.addEventListener('fullscreenchange', onFSChange);
+    return () => document.removeEventListener('fullscreenchange', onFSChange);
+  }, []);
+
+  // ปุ่ม ESC ยกเลิกการทดสอบ (เมื่ออยู่ใน CSS fallback หรือขณะรอ Click-to-Start)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && phase === 'test') {
+        handleCancelTest();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [phase, handleCancelTest]);
 
   // Game Loop
   useEffect(() => {
-    if (phase !== 'test' || !running) return;
+    if (phase !== 'test') return;
+
+    // ถ้ารอ Click-to-Start ให้วาด idle loop (ไม่นับเวลา)
+    if (waitingForClickToStart) {
+      let raf = 0;
+      const drawIdle = () => {
+        const canvas = canvasRef.current;
+        const ctx = canvas?.getContext('2d');
+        if (ctx) {
+          const now = performance.now();
+          ctx.fillStyle = '#0B0E14';
+          ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+          // Grid
+          ctx.strokeStyle = 'rgba(38, 49, 69, 0.35)';
+          ctx.lineWidth = 1;
+          for (let x = 40; x < CANVAS_W; x += 40) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
+          }
+          for (let y = 45; y < CANVAS_H; y += 45) {
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
+          }
+
+          // เป้ากลมกลมตรงกลาง + pulse
+          const pulse = 1 + Math.sin(now * 0.004) * 0.12;
+          const cx = CANVAS_W / 2;
+          const cy = CANVAS_H / 2;
+          const r = 36;
+
+          ctx.beginPath();
+          ctx.arc(cx, cy, r * 2.2 * pulse, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255, 70, 85, 0.07)';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(cx, cy, r * pulse, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255, 70, 85, 0.22)';
+          ctx.fill();
+          ctx.strokeStyle = '#FF4655';
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fill();
+
+          // ข้อความ Click-to-Start
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(cx - 220, cy - r - 44, 440, 32);
+          ctx.fillStyle = '#F1F5F9';
+          ctx.font = 'bold 14px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('คลิกที่เป้าตรงกลางเพื่อเริ่มจับเวลา', cx, cy - r - 22);
+
+          // Crosshair ตามเมาส์
+          const cross = crosshairRef.current;
+          const crosshairColor = '#00FF66';
+          const crossSize = 10;
+          ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+          ctx.lineWidth = 3.5;
+          ctx.beginPath();
+          ctx.moveTo(cross.x - crossSize, cross.y); ctx.lineTo(cross.x + crossSize, cross.y);
+          ctx.moveTo(cross.x, cross.y - crossSize); ctx.lineTo(cross.x, cross.y + crossSize);
+          ctx.stroke();
+          ctx.strokeStyle = crosshairColor;
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.moveTo(cross.x - crossSize, cross.y); ctx.lineTo(cross.x + crossSize, cross.y);
+          ctx.moveTo(cross.x, cross.y - crossSize); ctx.lineTo(cross.x, cross.y + crossSize);
+          ctx.stroke();
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(cross.x - 1, cross.y - 1, 2, 2);
+        }
+        raf = requestAnimationFrame(drawIdle);
+      };
+      raf = requestAnimationFrame(drawIdle);
+      return () => cancelAnimationFrame(raf);
+    }
+
+    if (!running) return;
 
     let lastFrameTime = performance.now();
     const stageDurationMs = currentModeMeta.stageDurationSec * 1000;
@@ -610,7 +761,7 @@ export function SensFinderView() {
 
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [phase, running, currentModeMeta.stageDurationSec, transitionToStage, finishAllStages, sens]);
+  }, [phase, running, waitingForClickToStart, currentModeMeta.stageDurationSec, transitionToStage, finishAllStages, sens]);
 
   // ระบบควบคุมเมาส์และจำลองความไวจริงบน Canvas
   // คำนวณเป็นตัวคูณความเร็วของเป้า + เทียบกับศูนย์กลาง Canvas (เทียบมาตรฐาน Sens 0.35 = 1.0x)
@@ -657,6 +808,23 @@ export function SensFinderView() {
       updateCrosshairPos(e.clientX, e.clientY);
       clickFeedbackRef.current = performance.now();
       const cross = crosshairRef.current;
+
+      // ===== Click-to-Start: คลิกเป้าแรกตรงกลางเพื่อเริ่มจับเวลา =====
+      if (waitingForClickToStart) {
+        const dist = Math.hypot(cross.x - CANVAS_W / 2, cross.y - CANVAS_H / 2);
+        if (dist <= 36) {
+          setWaitingForClickToStart(false);
+          stageStartTimeRef.current = performance.now();
+          spawnFlickTarget(); // เปลี่ยนเป้าเป็นเป้าสุ่มขนาดเล็กปกติ
+          setRunning(true);
+          setBannerMessage('🎯 ด่าน 1/3: Flick & Micro-Adjust (ยิงเป้าสุ่มขนาดเล็ก)');
+          setTimeout(() => setBannerMessage(null), 2500);
+        } else {
+          addFloatingText(cross.x, cross.y - 10, 'คลิกที่เป้าตรงกลาง!', '#FBBF24');
+        }
+        return;
+      }
+
       const currentStage = stageRef.current;
       const now = performance.now();
 
@@ -732,7 +900,7 @@ export function SensFinderView() {
         }
       }
     },
-    [phase, updateCrosshairPos, spawnFlickTarget, addParticles, addFloatingText]
+    [phase, waitingForClickToStart, updateCrosshairPos, spawnFlickTarget, addParticles, addFloatingText]
   );
 
   // คำนวณผลและเรียก AI วิเคราะห์อัตโนมัติเมื่อเข้าสู่หน้า result
@@ -956,7 +1124,14 @@ export function SensFinderView() {
           )}
 
           {phase === 'test' && (
-            <div className="space-y-2">
+            <div
+              ref={gameAreaRef}
+              className={
+                fullscreenState === 'fallback'
+                  ? 'fixed inset-0 z-50 bg-[#0B0E14] flex flex-col overflow-hidden'
+                  : 'space-y-2'
+              }
+            >
               {/* แถบสถานะ 3 ด่าน */}
               <div className="grid grid-cols-3 gap-1.5 text-center text-xs">
                 <div
@@ -1002,20 +1177,36 @@ export function SensFinderView() {
                 onMouseMove={handleMouseMove}
                 onMouseEnter={handleMouseMove}
                 onClick={handleCanvasClick}
-                className="w-full cursor-none border border-[#263145] bg-[#0B0E14]"
+                className={
+                  fullscreenState === 'fallback'
+                    ? 'flex-1 w-full cursor-none bg-[#0B0E14]'
+                    : 'w-full cursor-none border border-[#263145] bg-[#0B0E14]'
+                }
                 style={{ cursor: 'none' }}
                 aria-label="พื้นที่ทดสอบมินิเกมเล็งเป้า"
               />
 
               <div className="flex flex-wrap items-center justify-between text-xs text-[#94A3B8]">
                 <span>
-                  {stage === 'flick' && `ยิงเป้าสุ่มขนาดเล็ก | โดน: ${flickHits} | แม่น: ${stats.flickAccuracyPct}%`}
-                  {stage === 'tracking' && `เลี้ยงเป้าตามการเคลื่อนที่ | เกาะเป้า: ${stats.trackingPct}% | ความนิ่ง: ${stats.stabilityScore}%`}
-                  {stage === 'switching' && `กวาดเมาส์ยิงเป้า ACTIVE สีส้ม | โดน: ${switchHits} เป้า`}
+                  {waitingForClickToStart && '🎯 คลิกที่เป้าตรงกลางเพื่อเริ่มจับเวลา'}
+                  {!waitingForClickToStart && stage === 'flick' && `ยิงเป้าสุ่มขนาดเล็ก | โดน: ${flickHits} | แม่น: ${stats.flickAccuracyPct}%`}
+                  {!waitingForClickToStart && stage === 'tracking' && `เลี้ยงเป้าตามการเคลื่อนที่ | เกาะเป้า: ${stats.trackingPct}% | ความนิ่ง: ${stats.stabilityScore}%`}
+                  {!waitingForClickToStart && stage === 'switching' && `กวาดเมาส์ยิงเป้า ACTIVE สีส้ม | โดน: ${switchHits} เป้า`}
                 </span>
-                <span className="font-mono-tabular font-bold text-[#F1F5F9]">
-                  เวลาคงเหลือของด่านนี้: <span className="text-[#FBBF24]">{timeLeft}s</span>
-                </span>
+                <div className="flex items-center gap-3">
+                  {!waitingForClickToStart && (
+                    <span className="font-mono-tabular font-bold text-[#F1F5F9]">
+                      เวลาคงเหลือของด่านนี้: <span className="text-[#FBBF24]">{timeLeft}s</span>
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleCancelTest}
+                    className="border border-[#F87171]/50 bg-[#F87171]/10 px-2.5 py-1 text-[11px] font-semibold text-[#F87171] transition-colors hover:bg-[#F87171]/20"
+                  >
+                    ESC / ยกเลิก
+                  </button>
+                </div>
               </div>
             </div>
           )}
