@@ -936,10 +936,13 @@ export function LiveMatchView({
           {coachError && (
             <div
               role="alert"
-              className="flex items-start gap-2 border border-[#FF4655]/50 bg-[#FF4655]/12 p-3 text-xs leading-relaxed text-[#FECDD3]"
+              className="flex items-start gap-2 border border-[#FF4655]/60 bg-[#FF4655]/15 p-3 text-xs leading-relaxed text-[#FECDD3] break-words"
             >
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#FF4655]" />
-              <span>{coachError}</span>
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="font-semibold text-[#FCA5A5]">ไม่สามารถเรียก AI Coach ได้</div>
+                <p className="break-words text-[11px] text-[#FECDD3]">{coachError}</p>
+              </div>
             </div>
           )}
         </section>
