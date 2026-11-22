@@ -198,13 +198,15 @@ export function SensFinderView() {
     switchTotalShots,
   ]);
 
-  // สร้างเป้าด่าน 1 (Flick & Micro-Adjust)
+  // สร้างเป้าด่าน 1 (Flick & Micro-Adjust) — เว้นขอบบน-ล่างปลอดภัย ไม่ทับ Taskbar
   const spawnFlickTarget = useCallback(() => {
-    const radius = 15 + Math.random() * 6; // เป้าสุ่มขนาดเล็ก 15-21 px
-    const margin = radius + 40;
+    const radius = 16 + Math.random() * 6;
+    const padX = radius + 65;
+    const padTop = radius + 65;    // กันทับแถบแสดงเวลาด้านบน
+    const padBottom = radius + 95; // กันทับแถบ Taskbar ด้านล่าง (ปลอดภัย 100%)
     flickTargetRef.current = {
-      x: margin + Math.random() * (CANVAS_W - margin * 2),
-      y: margin + Math.random() * (CANVAS_H - margin * 2),
+      x: padX + Math.random() * (CANVAS_W - padX * 2),
+      y: padTop + Math.random() * (CANVAS_H - padTop - padBottom),
       radius,
       spawnTime: performance.now(),
       hit: false,
@@ -213,7 +215,6 @@ export function SensFinderView() {
       firstProximityTime: undefined,
     };
   }, []);
-
   // เริ่มด่าน 3 (Multi-Target Switch)
   const initSwitchTargets = useCallback(() => {
     const targets: SwitchTarget[] = [

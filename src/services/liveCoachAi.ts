@@ -60,19 +60,15 @@ export interface AiCoachResponse {
 }
 
 const COACH_TIMEOUT_MS = 20_000;
-const GEMINI_MODEL = 'gemini-3.8-flash';
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
 
-// ยิงตรงเข้า REST API ของ Gemini ด้วย fetch ธรรมดา (ไม่ผ่าน SDK ลดขนาด bundle บนเน็ตมือถือ)
-function buildEndpoint(apiKey: string): string {
-  return `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
-}
-
-function getApiKey(): string {
-  const key = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!key || typeof key !== 'string' || key.trim().length === 0) {
-    throw new Error('ยังไม่ได้ตั้งค่า VITE_GEMINI_API_KEY — กรุณาเพิ่มคีย์ในตัวแปรแวดล้อมของโปรเจกต์');
-  }
-  return key.trim();
+function getApiKeys(): string[] {
+  const raw = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!raw || typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0 && !k.includes('your_api_key'));
 }
 
 interface ShortAgentOrder {
@@ -141,7 +137,7 @@ function asString(value: unknown, fallback: string): string {
 
 function parseCoachResponse(rawText: string): AiCoachResponse {
   let jsonStr = rawText.trim();
-  const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\(\S\)]*?)```/);
   if (fenceMatch) {
     jsonStr = fenceMatch[1].trim();
   }
@@ -201,7 +197,62 @@ function parseCoachResponse(rawText: string): AiCoachResponse {
   };
 }
 
-// ---------- Main entry (Online 100% via Gemini API) ----------
+async function callGemini(prompt: string, apiKey: string, model: string, signal: AbortSignal): Promise<string> {
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.3,
+        maxOutputTokens: 400,
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`GEMINI_${res.status}`);
+  }
+
+  const payload = (await res.json()) as {
+    candidates?: { content?: { parts?: { text?: string }[] } }[];
+  };
+  const text = payload.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+  if (!text.trim()) throw new Error('EMPTY_RESPONSE');
+  return text;
+}
+
+async function callPollinationsFree(prompt: string, signal: AbortSignal): Promise<string> {
+  const res = await fetch('https://pollinations.ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      model: 'openai',
+      messages: [
+        { role: 'system', content: 'You are a Valorant tactical coach. Respond ONLY with valid minified JSON.' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.3,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`เชื่อมต่อ AI ฟรีไม่สำเร็จ (${res.status})`);
+  }
+
+  const payload = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+  const text = payload.choices?.[0]?.message?.content ?? '';
+  if (!text.trim()) throw new Error('คำตอบจาก AI ว่างเปล่า');
+  return text;
+}
+
+// ---------- Main entry (Online 100% with Auto-Fallback & Unlimited Free Tier) ----------
 
 export async function requestLiveCoachAdvice(
   input: LiveCoachRequest
@@ -218,46 +269,32 @@ export async function requestLiveCoachAdvice(
   }
 
   const normalized: LiveCoachRequest = { ...input, situation, tags };
-  const apiKey = getApiKey();
+  const prompt = buildPrompt(normalized);
+  const apiKeys = getApiKeys();
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), COACH_TIMEOUT_MS);
 
   try {
-    const res = await fetch(buildEndpoint(apiKey), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: buildPrompt(normalized) }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0.3,
-          maxOutputTokens: 350,
-        },
-      }),
-    });
-
-    if (!res.ok) {
-      const errBody = (await res.json().catch(() => null)) as {
-        error?: { message?: string };
-      } | null;
-      const errMsg = errBody?.error?.message || `API status ${res.status}`;
-      throw new Error(`เชื่อมต่อ Gemini API ไม่สำเร็จ (${res.status}): ${errMsg}`);
+    // 1. ลองเรียก Gemini จากทุกคีย์และโมเดลสำรองก่อน (ถ้ามีคีย์)
+    for (const key of apiKeys) {
+      for (const model of GEMINI_MODELS) {
+        try {
+          const rawText = await callGemini(prompt, key, model, controller.signal);
+          return parseCoachResponse(rawText);
+        } catch (e) {
+          if (e instanceof Error && e.name === 'AbortError') throw e;
+          // ถ้าติด 429 หรือโมเดลไม่รองรับ ให้ข้ามไปลองตัวถัดไปทันที
+        }
+      }
     }
 
-    const payload = (await res.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-    };
-    const rawText =
-      payload.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
-    if (!rawText.trim()) {
-      throw new Error('คำตอบจาก AI ว่างเปล่า กรุณาลองใหม่อีกครั้ง');
-    }
-    return parseCoachResponse(rawText);
+    // 2. หากไม่มีคีย์ Gemini หรือติดโควตา 429 ทุกตัว ให้สลับไปใช้ Pollinations AI (ฟรีไม่จำกัด) ทันที
+    const freeRawText = await callPollinationsFree(prompt, controller.signal);
+    return parseCoachResponse(freeRawText);
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('หมดเวลาการเชื่อมต่อ Gemini API (เกิน 20 วินาที) — กรุณาลองใหม่อีกครั้ง');
+      throw new Error('หมดเวลาการเชื่อมต่อ AI (เกิน 20 วินาที) — กรุณาลองใหม่อีกครั้ง');
     }
     throw err instanceof Error ? err : new Error(String(err));
   } finally {
