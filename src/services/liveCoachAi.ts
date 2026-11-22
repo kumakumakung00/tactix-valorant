@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { Side } from '../types/tactix';
 
 export interface CoachTeamAgentInput {
@@ -87,7 +87,7 @@ interface RawCoachResponse {
 }
 
 const COACH_TIMEOUT_MS = 15_000;
-const COACH_MODEL = 'gemini-2.5-flash';
+const COACH_MODEL = 'gemini-3.8-flash';
 
 const VALID_TONES = new Set(['attack', 'defense', 'lurk', 'warning']);
 const VALID_UTILITY_KINDS = new Set([
@@ -202,7 +202,7 @@ export async function requestLiveCoachAdvice(
         abortSignal: controller.signal,
         systemInstruction:
           'Valorant VCT Coach. Reply strict JSON in concise Thai for a 30s Buy Phase. Give 1 short command (<15 words) per team slot using real abilities and map Callout X,Y (5-95) plus moveToX/Y and 2-4 utilities.',
-        thinkingConfig: { thinkingBudget: 0 },
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,

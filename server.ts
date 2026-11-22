@@ -210,7 +210,7 @@ async function createApp() {
         .join('\n');
 
       const response = await callGeminiWithRetry(ai, {
-        model: 'gemini-4-hydrogen',
+        model: 'gemini-3.8-flash',
         contents: prompt,
         config: {
           systemInstruction:
