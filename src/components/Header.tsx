@@ -12,7 +12,6 @@ interface HeaderProps {
 const NAV_ITEMS: { id: AppView; label: string }[] = [
   { id: 'board', label: 'กระดานกลยุทธ์' },
   { id: 'livematch', label: 'แก้เกมเรียลไทม์ (Live Match)' },
-  { id: 'agents', label: 'ทำเนียบ Agent' },
   { id: 'training', label: 'การฝึกเล่น' },
   { id: 'progress', label: 'พัฒนาฝีมือ (My Progress)' },
   { id: 'crosshairs', label: 'โค้ดเป้าเล็ง (Crosshairs)' },

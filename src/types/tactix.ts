@@ -18,7 +18,16 @@ export type LiveMatchProblemId =
   | 'def_postplant_lose'
   | 'def_man_down';
 
-export type AppView = 'board' | 'livematch' | 'agents' | 'training' | 'progress' | 'crosshairs';
+export type AppView = 'board' | 'livematch' | 'training' | 'progress' | 'crosshairs';
+
+export interface PendingAbilityPlace {
+  agentId: string;
+  agentName: string;
+  abilitySlot: string;
+  abilityName: string;
+  abilityIcon?: string;
+  kind: 'smoke' | 'flash' | 'recon' | 'molly' | 'wall' | 'pin';
+}
 
 export interface AgentAbility {
   slot: string;

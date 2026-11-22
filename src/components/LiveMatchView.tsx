@@ -7,34 +7,42 @@ import {
   Coins,
   Compass,
   Crosshair,
-  Dices,
   Eye,
   Flame,
+  Loader2,
   MapPin,
   Plus,
   Radar,
   RotateCcw,
   RotateCw,
   Search,
+  Send,
   Shield,
   Sparkles,
   Swords,
+  Trash2,
   Users,
   Wind,
   X,
 } from 'lucide-react';
 import { ROLES_ORDER, ROLE_META } from '../data/valorantFallback';
-import { Agent, AgentRole, BoardMarker } from '../types/tactix';
-import { LiveMatchEconomy, LiveMatchProblemId, Side, ValorantMap } from '../types/tactix';
+import { useMapOrientation, ROTATION_TRANSITION } from '../hooks/useMapOrientation';
+import {
+  Agent,
+  AgentRole,
+  BoardElements,
+  BoardMarker,
+  LiveMatchEconomy,
+  LiveMatchProblemId,
+  RouteStroke,
+  Side,
+  ValorantMap,
+} from '../types/tactix';
 import {
   LIVE_MATCH_ECONOMIES,
-  LIVE_MATCH_VARIATIONS,
   buildEnemyCounterWarnings,
-  buildLiveMatchCounterPlay,
-  getProblemsForSide,
 } from '../utils/liveMatchEngine';
 import { AgentAvatar } from './AgentAvatar';
-import { ROTATION_TRANSITION, useMapOrientation } from '../hooks/useMapOrientation';
 
 export interface LiveMatchState {
   mapId: string;
@@ -42,8 +50,37 @@ export interface LiveMatchState {
   economy: LiveMatchEconomy;
   ourTeam: (string | null)[];
   enemyTeam: (string | null)[];
-  problemId: LiveMatchProblemId | null;
-  variation: 1 | 2 | 3;
+  problemId?: LiveMatchProblemId | null;
+  variation?: 1 | 2 | 3;
+  situationText?: string;
+  selectedTags?: string[];
+}
+
+interface AiAgentOrder {
+  slot: number;
+  agentId?: string;
+  agentName: string;
+  callout: string;
+  command: string;
+  x: number;
+  y: number;
+  roleTone: 'attack' | 'defense' | 'lurk' | 'warning';
+  moveToX?: number;
+  moveToY?: number;
+}
+
+interface AiUtilityPlacement {
+  kind: 'smoke' | 'flash' | 'recon' | 'molly' | 'wall' | 'spike' | 'pin';
+  label: string;
+  x: number;
+  y: number;
+}
+
+interface AiCoachResponse {
+  strategyName: string;
+  headline: string;
+  agentOrders: AiAgentOrder[];
+  utilityPlacements: AiUtilityPlacement[];
 }
 
 interface LiveMatchViewProps {
@@ -55,6 +92,29 @@ interface LiveMatchViewProps {
   onResetMatch: () => void;
 }
 
+const QUICK_TAGS_BY_SIDE: Record<Side, string[]> = {
+  attack: [
+    'ศัตรูมี Op',
+    'โดนบุกเร็ว / ดันสวน',
+    'โดนตุ๋ยหลัง',
+    'ติดกับดัก Cypher/KJ',
+    'เข้าไซท์ไม่ได้',
+    'รีเทคไม่ทัน',
+    'ศัตรู Eco / Force',
+    'เสียคนต้นรอบ',
+  ],
+  defense: [
+    'โดนบุกเร็ว 5 คน',
+    'ศัตรูชอบ Fake',
+    'เสียพื้นที่ Mid',
+    'แพ้ Post-Plant',
+    'ศัตรูมี Op',
+    'โดนตุ๋ยหลัง',
+    'ต้อง Retake',
+    'คนน้อยกว่า 4v5',
+  ],
+};
+
 function updateSlot(
   team: (string | null)[],
   slotIndex: number,
@@ -64,6 +124,21 @@ function updateSlot(
   const next = team.map((id) => (agentId !== null && id === agentId ? null : id));
   next[slotIndex] = agentId;
   return next;
+}
+
+function getToneColor(tone: AiAgentOrder['roleTone']): string {
+  switch (tone) {
+    case 'attack':
+      return '#FF4655';
+    case 'defense':
+      return '#22D3EE';
+    case 'lurk':
+      return '#FBBF24';
+    case 'warning':
+      return '#FB923C';
+    default:
+      return '#34D399';
+  }
 }
 
 export function LiveMatchView({
@@ -83,6 +158,11 @@ export function LiveMatchView({
   } | null>(null);
   const [pickerSearch, setPickerSearch] = useState('');
   const [pickerRole, setPickerRole] = useState<AgentRole | 'all'>('all');
+
+  const [coachPlan, setCoachPlan] = useState<AiCoachResponse | null>(null);
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [coachError, setCoachError] = useState<string | null>(null);
+  const [focusedSlot, setFocusedSlot] = useState<number | null>(null);
 
   const mapMenuRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -110,6 +190,9 @@ export function LiveMatchView({
   const agentById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
   const standardMaps = useMemo(() => maps.filter((m) => m.category !== 'tdm'), [maps]);
   const tdmMaps = useMemo(() => maps.filter((m) => m.category === 'tdm'), [maps]);
+
+  const situationText = matchState.situationText ?? '';
+  const selectedTags = matchState.selectedTags ?? [];
 
   useEffect(() => {
     setImgFailed(false);
@@ -143,35 +226,6 @@ export function LiveMatchView({
     return () => ro.disconnect();
   }, []);
 
-  const sideProblems = useMemo(() => getProblemsForSide(matchState.side), [matchState.side]);
-
-  const activeCounter = useMemo(() => {
-    if (!matchState.problemId) return null;
-    const belongsToSide = sideProblems.some((p) => p.id === matchState.problemId);
-    if (!belongsToSide) return null;
-    const agentNames = matchState.ourTeam.map((id) =>
-      id ? (agentById.get(id)?.name ?? null) : null
-    );
-    return buildLiveMatchCounterPlay({
-      map: activeMap,
-      side: matchState.side,
-      economy: matchState.economy,
-      problemId: matchState.problemId,
-      ourTeam: matchState.ourTeam,
-      variation: matchState.variation,
-      agentNames: agentNames as string[],
-    });
-  }, [
-    matchState.problemId,
-    matchState.side,
-    matchState.economy,
-    matchState.ourTeam,
-    matchState.variation,
-    activeMap,
-    sideProblems,
-    agentById,
-  ]);
-
   const activeEconomyMeta = useMemo(
     () =>
       LIVE_MATCH_ECONOMIES.find((e) => e.id === matchState.economy) ?? LIVE_MATCH_ECONOMIES[3],
@@ -191,6 +245,58 @@ export function LiveMatchView({
       return true;
     });
   }, [agents, pickerRole, pickerSearch]);
+
+  const boardElements = useMemo<BoardElements>(() => {
+    if (!coachPlan) return { strokes: [], markers: [] };
+
+    const markers: BoardMarker[] = [];
+    const strokes: RouteStroke[] = [];
+
+    coachPlan.agentOrders.forEach((order, idx) => {
+      const slotIdx = Math.max(0, Math.min(4, (order.slot || idx + 1) - 1));
+      const resolvedAgentId = order.agentId ?? matchState.ourTeam[slotIdx] ?? undefined;
+      markers.push({
+        id: `ai-pos-${slotIdx}-${idx}`,
+        kind: 'position',
+        x: order.x,
+        y: order.y,
+        slotNumber: order.slot || idx + 1,
+        agentId: resolvedAgentId,
+        team: 'our',
+        label: `${order.agentName} · ${order.callout}`,
+        roleTone: order.roleTone,
+      });
+
+      if (
+        typeof order.moveToX === 'number' &&
+        typeof order.moveToY === 'number' &&
+        Math.hypot(order.moveToX - order.x, order.moveToY - order.y) >= 3
+      ) {
+        strokes.push({
+          id: `ai-route-${slotIdx}-${idx}`,
+          kind: 'route',
+          points: [
+            { x: order.x, y: order.y },
+            { x: order.moveToX, y: order.moveToY },
+          ],
+          color: getToneColor(order.roleTone),
+          dashed: true,
+        });
+      }
+    });
+
+    coachPlan.utilityPlacements.forEach((u, idx) => {
+      markers.push({
+        id: `ai-util-${idx}`,
+        kind: u.kind,
+        x: u.x,
+        y: u.y,
+        label: u.label,
+      });
+    });
+
+    return { strokes, markers };
+  }, [coachPlan, matchState.ourTeam]);
 
   const squareSize =
     stageSize.width > 0 && stageSize.height > 0
@@ -233,16 +339,107 @@ export function LiveMatchView({
   );
 
   const handleHalftimeSwap = () => {
+    setCoachPlan(null);
+    setCoachError(null);
     onChangeMatchState((prev) => ({
       ...prev,
       side: prev.side === 'attack' ? 'defense' : 'attack',
       economy: 'pistol',
-      problemId: null,
+      selectedTags: [],
     }));
+  };
+
+  const handleToggleTag = (tag: string) => {
+    onChangeMatchState((prev) => {
+      const current = prev.selectedTags ?? [];
+      const next = current.includes(tag)
+        ? current.filter((t) => t !== tag)
+        : [...current, tag];
+      return { ...prev, selectedTags: next };
+    });
+  };
+
+  const handleAskCoach = async () => {
+    if (coachLoading) return;
+    if (!situationText.trim() && selectedTags.length === 0) {
+      setCoachError('กรุณาเลือก Tag ด่วน หรือพิมพ์สถานการณ์สั้นๆ ก่อนขอคำสั่ง');
+      return;
+    }
+
+    setCoachLoading(true);
+    setCoachError(null);
+    setFocusedSlot(null);
+
+    try {
+      const ourTeamPayload = matchState.ourTeam
+        .map((id, idx) => {
+          const ag = id ? agentById.get(id) : undefined;
+          if (!ag) return null;
+          return {
+            slot: idx + 1,
+            id: ag.id,
+            name: ag.name,
+            role: ROLE_META[ag.role].label,
+            abilities: ag.abilities.slice(0, 4).map((ab) => ab.name),
+          };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
+
+      const enemyTeamPayload = matchState.enemyTeam
+        .map((id) => {
+          const ag = id ? agentById.get(id) : undefined;
+          if (!ag) return null;
+          return { name: ag.name, role: ROLE_META[ag.role].label };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
+
+      const calloutsPayload = activeMap.callouts.map((c) => ({
+        key: c.key,
+        group: c.group,
+        x: c.x,
+        y: c.y,
+      }));
+
+      const res = await fetch('/api/live-coach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mapName: activeMap.name,
+          sites: activeMap.sites,
+          side: matchState.side,
+          economy: `${activeEconomyMeta.label} (${activeEconomyMeta.th})`,
+          ourTeam: ourTeamPayload,
+          enemyTeam: enemyTeamPayload,
+          callouts: calloutsPayload,
+          situation: situationText.trim(),
+          tags: selectedTags,
+        }),
+      });
+
+      const data = (await res.json()) as Partial<AiCoachResponse> & { error?: string };
+      if (!res.ok) {
+        throw new Error(data.error || 'เกิดข้อผิดพลาดในการเชื่อมต่อ AI Coach');
+      }
+
+      setCoachPlan({
+        strategyName: data.strategyName || 'แผนแก้เกม AI Coach',
+        headline: data.headline || 'ปรับตำแหน่งตามคำสั่งโค้ชด้านล่างทันที',
+        agentOrders: Array.isArray(data.agentOrders) ? data.agentOrders : [],
+        utilityPlacements: Array.isArray(data.utilityPlacements) ? data.utilityPlacements : [],
+      });
+    } catch (err) {
+      setCoachError(
+        err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อ AI Coach ได้ในขณะนี้'
+      );
+    } finally {
+      setCoachLoading(false);
+    }
   };
 
   let smokeNumber = 0;
   const canCopyBoardTeam = boardOurTeam.some(Boolean);
+  const quickTags = QUICK_TAGS_BY_SIDE[matchState.side];
+  const ourPickedCount = matchState.ourTeam.filter(Boolean).length;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#0B0E14] text-[#F1F5F9]">
@@ -277,6 +474,7 @@ export function LiveMatchView({
                       key={m.id}
                       type="button"
                       onClick={() => {
+                        setCoachPlan(null);
                         onChangeMatchState((prev) => ({ ...prev, mapId: m.id }));
                         setMapMenuOpen(false);
                       }}
@@ -302,6 +500,7 @@ export function LiveMatchView({
                           key={m.id}
                           type="button"
                           onClick={() => {
+                            setCoachPlan(null);
                             onChangeMatchState((prev) => ({ ...prev, mapId: m.id }));
                             setMapMenuOpen(false);
                           }}
@@ -332,13 +531,14 @@ export function LiveMatchView({
           >
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                setCoachPlan(null);
                 onChangeMatchState((prev) => ({
                   ...prev,
                   side: 'attack',
-                  problemId: null,
-                }))
-              }
+                  selectedTags: [],
+                }));
+              }}
               aria-pressed={matchState.side === 'attack'}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
                 matchState.side === 'attack'
@@ -351,13 +551,14 @@ export function LiveMatchView({
             </button>
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                setCoachPlan(null);
                 onChangeMatchState((prev) => ({
                   ...prev,
                   side: 'defense',
-                  problemId: null,
-                }))
-              }
+                  selectedTags: [],
+                }));
+              }}
               aria-pressed={matchState.side === 'defense'}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap ${
                 matchState.side === 'defense'
@@ -384,17 +585,21 @@ export function LiveMatchView({
         {/* Prominent Red Reset Match Button */}
         <button
           type="button"
-          onClick={onResetMatch}
+          onClick={() => {
+            setCoachPlan(null);
+            setCoachError(null);
+            onResetMatch();
+          }}
           className="clip-angle-sm flex items-center gap-1.5 bg-[#FF4655] px-4 py-1.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-[#DC2626] whitespace-nowrap shrink-0"
         >
           <RotateCcw className="h-3.5 w-3.5" />
-          จบเกม / รีเซ็ตแมตช์ (Reset Match)
+          จบเกม / รีเซ็ตแมตช์
         </button>
       </div>
 
       {/* Main 3-Column Live Match Workspace */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[270px_320px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[290px_350px_minmax(0,1fr)]">
-        {/* Column 1: Left (Match Info: Economy + Our Team 5 + Enemy Team 5) */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[268px_330px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[284px_360px_minmax(0,1fr)]">
+        {/* Column 1: Left (Economy + Our Team 5 + Enemy Team 5) */}
         <aside className="scrollbar-thin flex min-h-0 flex-col gap-4 border-b border-[#263145] bg-[#111620] p-4 lg:overflow-y-auto lg:border-b-0 lg:border-r">
           {/* Economy Selector */}
           <section className="space-y-2">
@@ -441,7 +646,7 @@ export function LiveMatchView({
             <div className="flex items-center justify-between gap-2">
               <h2 className="flex items-center gap-1.5 font-display text-xs font-bold uppercase tracking-wider text-[#22D3EE]">
                 <Users className="h-3.5 w-3.5" />
-                ทีมเรา (5 ตัว)
+                ทีมเรา ({ourPickedCount}/5)
               </h2>
               {canCopyBoardTeam && (
                 <button
@@ -592,12 +797,12 @@ export function LiveMatchView({
           </section>
         </aside>
 
-        {/* Column 2: Center (Buy Phase Problem Selector) */}
-        <section className="scrollbar-thin flex min-h-0 flex-col gap-3 border-b border-[#263145] bg-[#0B0E14] p-4 lg:overflow-y-auto lg:border-b-0 lg:border-r">
+        {/* Column 2: Center (AI Coach Live Consultation Input + Quick-Tap Tags) */}
+        <section className="scrollbar-thin flex min-h-0 flex-col gap-4 border-b border-[#263145] bg-[#0B0E14] p-4 lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <header className="space-y-1">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-[#22D3EE]">
-                ช่วง Buy Phase
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span className="font-semibold uppercase tracking-wider text-[#22D3EE]">
+                AI Coach · ช่วง Buy Phase
               </span>
               <span
                 className={`font-display text-xs font-bold uppercase ${
@@ -608,78 +813,185 @@ export function LiveMatchView({
               </span>
             </div>
             <h2 className="font-display text-lg font-bold text-[#F1F5F9]">
-              รอบที่แล้วเจอปัญหาอะไรอยู่?
+              ปรึกษาแก้เกมสด
             </h2>
-            <p className="text-xs text-[#94A3B8]">
-              กดเลือกปัญหา 1 ข้อเพื่อดูจุดยืนแก้เกมบนแผนที่และคำสั่งทันที
+            <p className="text-xs leading-relaxed text-[#94A3B8]">
+              กด Tag ปัญหาด่วนหรือพิมพ์สถานการณ์สั้นๆ AI Coach จะสั่งแผนแยกตามตัวละครพร้อมปักหมุดพิกัดลงแผนที่ 2D ทันที
             </p>
           </header>
 
-          <div className="flex flex-col gap-2.5">
-            {sideProblems.map((prob, index) => {
-              const isSelected = matchState.problemId === prob.id;
-              const activeBorder =
-                matchState.side === 'attack'
-                  ? 'border-[#FF4655] bg-[#FF4655]/14'
-                  : 'border-[#22D3EE] bg-[#22D3EE]/14';
+          {/* Context Summary Strip sent to AI */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border border-[#263145] bg-[#111620] px-3 py-2 text-[11px] text-[#CBD5E1]">
+            <span>แผนที่: <strong className="text-[#F1F5F9]">{activeMap.name}</strong></span>
+            <span className="text-[#475569]" aria-hidden="true">·</span>
+            <span>เงิน: <strong className="text-[#FBBF24]">{activeEconomyMeta.label}</strong></span>
+            <span className="text-[#475569]" aria-hidden="true">·</span>
+            <span>ทีมเรา: <strong className="font-mono-tabular text-[#22D3EE]">{ourPickedCount}/5</strong></span>
+          </div>
 
-              return (
+          {/* Quick-Tap Tags */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-display text-xs font-semibold uppercase tracking-wider text-[#94A3B8]">
+                Tag กดด่วน ({selectedTags.length})
+              </span>
+              {selectedTags.length > 0 && (
                 <button
-                  key={prob.id}
                   type="button"
-                  aria-pressed={isSelected}
                   onClick={() =>
-                    onChangeMatchState((prev) => ({
-                      ...prev,
-                      problemId: prev.problemId === prob.id ? null : prob.id,
-                    }))
+                    onChangeMatchState((prev) => ({ ...prev, selectedTags: [] }))
                   }
-                  className={`flex w-full items-start gap-3 border p-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF4655] ${
-                    isSelected
-                      ? activeBorder
-                      : 'border-[#263145] bg-[#111620] hover:border-[#475569] hover:bg-[#171E2B]'
-                  }`}
+                  className="text-[11px] text-[#94A3B8] hover:text-[#FF4655]"
                 >
-                  <span
-                    className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center font-mono-tabular text-xs font-bold ${
-                      isSelected
+                  ล้าง Tag
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {quickTags.map((tag) => {
+                const active = selectedTags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => handleToggleTag(tag)}
+                    className={`border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                      active
                         ? matchState.side === 'attack'
-                          ? 'bg-[#FF4655] text-white'
-                          : 'bg-[#22D3EE] text-[#0B0E14]'
-                        : 'bg-[#171E2B] text-[#94A3B8]'
+                          ? 'border-[#FF4655] bg-[#FF4655]/18 text-[#F1F5F9]'
+                          : 'border-[#22D3EE] bg-[#22D3EE]/18 text-[#F1F5F9]'
+                        : 'border-[#263145] bg-[#111620] text-[#CBD5E1] hover:border-[#475569] hover:bg-[#171E2B]'
                     }`}
                   >
-                    {index + 1}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-bold leading-snug text-[#F1F5F9]">
-                      {prob.title}
-                    </div>
-                    <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">{prob.symptom}</p>
-                    {isSelected && (
-                      <div className="mt-2 text-[11px] font-semibold text-[#34D399]">
-                        แนวแก้: {prob.counterName}
-                      </div>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
           </div>
+
+          {/* Short Situation Text Input */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="live-coach-situation"
+                className="font-display text-xs font-semibold uppercase tracking-wider text-[#94A3B8]"
+              >
+                เล่าสถานการณ์เพิ่มเติม (ไม่บังคับ)
+              </label>
+              {situationText.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeMatchState((prev) => ({ ...prev, situationText: '' }))
+                  }
+                  className="text-[11px] text-[#64748B] hover:text-[#F1F5F9]"
+                >
+                  ล้างข้อความ
+                </button>
+              )}
+            </div>
+            <textarea
+              id="live-coach-situation"
+              rows={4}
+              value={situationText}
+              onChange={(e) =>
+                onChangeMatchState((prev) => ({ ...prev, situationText: e.target.value }))
+              }
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                  e.preventDefault();
+                  void handleAskCoach();
+                }
+              }}
+              placeholder="พิมพ์สั้นๆ เช่น: Jett ศัตรูถือ Op ยืนดัก A Main ตลอด, Cypher วางสายที่ B ถ้าเดินเข้าโดนยิงสวน..."
+              className="w-full resize-none border border-[#263145] bg-[#111620] p-3 text-xs leading-relaxed text-[#F1F5F9] placeholder:text-[#64748B] focus:border-[#22D3EE] focus:outline-none"
+            />
+            <div className="flex items-center justify-between gap-2 text-[11px] text-[#64748B]">
+              <span>กด Ctrl+Enter เพื่อส่งทันที</span>
+              {ourPickedCount === 0 && (
+                canCopyBoardTeam ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onChangeMatchState((prev) => ({
+                        ...prev,
+                        ourTeam: [...boardOurTeam],
+                      }))
+                    }
+                    className="font-semibold text-[#22D3EE] hover:underline whitespace-nowrap"
+                  >
+                    ดึงทีม 5 ตัวจากกระดานหลัก
+                  </button>
+                ) : (
+                  <span className="text-[#FBBF24]">แนะนำเลือกทีมเรา 5 ตัวด้านซ้าย</span>
+                )
+              )}
+            </div>
+          </div>
+
+          {/* Primary Submit CTA */}
+          <div className="space-y-2 pt-1">
+            <button
+              type="button"
+              disabled={coachLoading || (!situationText.trim() && selectedTags.length === 0)}
+              onClick={() => void handleAskCoach()}
+              className="clip-angle-sm flex w-full items-center justify-center gap-2 bg-[#FF4655] px-4 py-2.5 text-xs font-bold uppercase tracking-wide text-white transition-colors hover:bg-[#DC2626] disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {coachLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>AI Coach กำลังวิเคราะห์แผน...</span>
+                </>
+              ) : (
+                <>
+                  <Send className="h-3.5 w-3.5" />
+                  <span>ขอคำสั่งแก้เกม (AI Coach)</span>
+                </>
+              )}
+            </button>
+
+            {coachPlan && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCoachPlan(null);
+                  setCoachError(null);
+                  setFocusedSlot(null);
+                }}
+                className="flex w-full items-center justify-center gap-1.5 border border-[#263145] bg-[#111620] py-2 text-xs font-medium text-[#94A3B8] transition-colors hover:border-[#475569] hover:text-[#F1F5F9]"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                ล้างแผน AI บนกระดาน
+              </button>
+            )}
+          </div>
+
+          {/* Error Banner */}
+          {coachError && (
+            <div
+              role="alert"
+              className="flex items-start gap-2 border border-[#FF4655]/50 bg-[#FF4655]/12 p-3 text-xs leading-relaxed text-[#FECDD3]"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#FF4655]" />
+              <span>{coachError}</span>
+            </div>
+          )}
         </section>
 
-        {/* Column 3: Right (Instant Counter Advice: 2D Adjusted Map + 3 Commands + Enemy Warnings) */}
+        {/* Column 3: Right (2D Adjusted Map + Per-Agent AI Coach Orders + Enemy Warnings) */}
         <section className="scrollbar-thin flex min-h-0 flex-col bg-[#0B0E14] lg:overflow-y-auto">
-          {/* 2D Map Preview with Adjusted Positions & Arrows */}
+          {/* 2D Map Preview with AI Updated Positions, Arrows & Utility */}
           <div className="flex flex-col border-b border-[#263145] bg-[#111620]">
             <div className="flex items-center justify-between border-b border-[#263145] px-4 py-2">
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex min-w-0 items-center gap-2">
                 <span className="font-display text-xs font-bold uppercase tracking-wider text-[#F1F5F9] whitespace-nowrap">
                   แผนที่แก้เกม 2D · {activeMap.name}
                 </span>
-                {activeCounter && (
+                {coachPlan && (
                   <span className="truncate text-xs font-semibold text-[#34D399]">
-                    — {activeCounter.problem.counterName}
+                    — {coachPlan.strategyName}
                   </span>
                 )}
               </div>
@@ -700,7 +1012,7 @@ export function LiveMatchView({
 
             <div
               ref={stageRef}
-              className="relative flex h-[300px] items-center justify-center overflow-hidden bg-[#0B0E14] sm:h-[340px]"
+              className="relative flex h-[310px] items-center justify-center overflow-hidden bg-[#0B0E14] sm:h-[360px]"
             >
               {activeMap.splash && (
                 <img
@@ -854,7 +1166,7 @@ export function LiveMatchView({
                           </g>
                         ))}
 
-                    {activeCounter?.elements.strokes.map((st) => {
+                    {boardElements.strokes.map((st) => {
                       if (st.points.length < 2) return null;
                       const ptsStr = st.points.map((p) => `${p.x},${p.y}`).join(' ');
                       const last = st.points[st.points.length - 1];
@@ -893,7 +1205,7 @@ export function LiveMatchView({
                       );
                     })}
 
-                    {activeCounter?.elements.markers
+                    {boardElements.markers
                       .filter((m) => m.kind === 'smoke')
                       .map((m) => {
                         smokeNumber += 1;
@@ -924,8 +1236,8 @@ export function LiveMatchView({
                       })}
                   </svg>
 
-                  {/* Position Circles & Tactical Markers */}
-                  {activeCounter?.elements.markers
+                  {/* Position Circles & Tactical Skill Markers */}
+                  {boardElements.markers
                     .filter((m) => m.kind !== 'smoke')
                     .map((m) => {
                       const ag = m.agentId ? agentById.get(m.agentId) : undefined;
@@ -956,7 +1268,10 @@ export function LiveMatchView({
                           },
                         };
                         const tone =
-                          toneRing[m.roleTone ?? (matchState.side === 'attack' ? 'attack' : 'defense')];
+                          toneRing[
+                            m.roleTone ?? (matchState.side === 'attack' ? 'attack' : 'defense')
+                          ];
+                        const isFocused = focusedSlot !== null && m.slotNumber === focusedSlot;
 
                         return (
                           <div
@@ -965,7 +1280,9 @@ export function LiveMatchView({
                             className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center"
                           >
                             <div
-                              className={`flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border-2 bg-[#0B0E14]/95 ring-2 ring-offset-1 ring-offset-[#0B0E14] shadow-lg ${tone.border} ${tone.ring}`}
+                              className={`flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border-2 bg-[#0B0E14]/95 ring-2 ring-offset-1 ring-offset-[#0B0E14] shadow-lg transition-transform ${tone.border} ${
+                                isFocused ? 'scale-125 ring-white' : tone.ring
+                              }`}
                             >
                               {ag?.icon ? (
                                 <img
@@ -1066,61 +1383,92 @@ export function LiveMatchView({
             </div>
           </div>
 
-          {/* 3-Command Rapid Counter Orders + Enemy Agent Warnings */}
+          {/* Per-Agent Coach Commands + Enemy Warnings */}
           <div className="grid grid-cols-1 gap-4 p-4 xl:grid-cols-2">
-            {/* Box 1: 3 Rapid Counter Commands (5-sec read) */}
+            {/* Box 1: AI Coach Per-Agent Commands */}
             <div className="space-y-2.5 border border-[#263145] bg-[#111620] p-3.5">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="font-display text-xs font-bold uppercase tracking-wider text-[#22D3EE]">
-                  คำสั่งแก้เกมทันที 3 ข้อ (อ่านจบใน 5 วิ)
+                  คำสั่งโค้ชแยกตาม Agent
                 </h3>
                 <span className="font-mono-tabular text-[11px] font-semibold text-[#FBBF24]">
                   {activeEconomyMeta.label}
                 </span>
               </div>
 
-              {activeCounter ? (
+              {coachLoading ? (
+                <div className="flex min-h-[200px] flex-col items-center justify-center gap-2 border border-dashed border-[#263145] bg-[#0B0E14]/60 p-4 text-center">
+                  <Loader2 className="h-5 w-5 animate-spin text-[#22D3EE]" />
+                  <p className="text-xs font-semibold text-[#CBD5E1]">
+                    กำลังคำนวณแผนแก้เกมและพิกัดบน {activeMap.name}...
+                  </p>
+                </div>
+              ) : coachPlan ? (
                 <>
                   <div className="border border-[#263145] bg-[#171E2B] px-3 py-2">
-                    <div className="text-xs font-bold text-[#F1F5F9]">
-                      {activeCounter.problem.counterName}
+                    <div className="text-xs font-bold text-[#34D399]">
+                      {coachPlan.strategyName}
                     </div>
-                    <div className="mt-0.5 text-[11px] text-[#94A3B8]">
-                      {activeCounter.headline}
+                    <div className="mt-0.5 text-[11px] leading-relaxed text-[#E2E8F0]">
+                      {coachPlan.headline}
                     </div>
                   </div>
 
                   <ol className="space-y-2">
-                    {activeCounter.commands.map((cmd, idx) => (
-                      <li
-                        key={cmd.head}
-                        className="flex items-start gap-2.5 border border-[#263145] bg-[#171E2B] p-2.5"
-                      >
-                        <span className="flex h-5 w-5 shrink-0 items-center justify-center bg-[#FF4655] font-mono-tabular text-xs font-bold text-white">
-                          {idx + 1}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-bold leading-snug text-[#F1F5F9]">
-                            {cmd.actor && (
-                              <span className="text-[#FBBF24]">{cmd.actor}: </span>
+                    {coachPlan.agentOrders.map((order, idx) => {
+                      const slotIdx = Math.max(0, Math.min(4, (order.slot || idx + 1) - 1));
+                      const agId = order.agentId ?? matchState.ourTeam[slotIdx];
+                      const ag = agId ? agentById.get(agId) : undefined;
+                      const isFocused = focusedSlot === (order.slot || idx + 1);
+
+                      return (
+                        <li key={`${order.slot}-${order.agentName}-${idx}`}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFocusedSlot((prev) =>
+                                prev === (order.slot || idx + 1) ? null : order.slot || idx + 1
+                              )
+                            }
+                            className={`flex w-full items-start gap-2.5 border p-2.5 text-left transition-colors ${
+                              isFocused
+                                ? 'border-[#22D3EE] bg-[#22D3EE]/10'
+                                : 'border-[#263145] bg-[#171E2B] hover:border-[#475569]'
+                            }`}
+                          >
+                            {ag ? (
+                              <AgentAvatar agent={ag} size="xs" />
+                            ) : (
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center bg-[#FF4655] font-mono-tabular text-xs font-bold text-white">
+                                {order.slot || idx + 1}
+                              </span>
                             )}
-                            {cmd.head}
-                          </div>
-                          <div className="mt-0.5 text-[11px] leading-relaxed text-[#CBD5E1]">
-                            {cmd.detail}
-                          </div>
-                        </div>
-                      </li>
-                    ))}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center justify-between gap-1">
+                                <span className="font-display text-xs font-bold uppercase text-[#F1F5F9]">
+                                  {order.agentName}
+                                </span>
+                                <span className="font-mono-tabular text-[10px] text-[#94A3B8]">
+                                  {order.callout} · ({Math.round(order.x)}, {Math.round(order.y)})
+                                </span>
+                              </div>
+                              <p className="mt-0.5 text-[11px] leading-relaxed text-[#E2E8F0]">
+                                {order.command}
+                              </p>
+                            </div>
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ol>
                 </>
               ) : (
-                <div className="flex min-h-[180px] flex-col items-center justify-center border border-dashed border-[#263145] bg-[#0B0E14]/60 p-4 text-center">
+                <div className="flex min-h-[200px] flex-col items-center justify-center border border-dashed border-[#263145] bg-[#0B0E14]/60 p-4 text-center">
                   <p className="text-sm font-semibold text-[#CBD5E1]">
-                    เลือกปัญหาที่เจอในคอลัมน์ตรงกลาง
+                    พร้อมปรึกษา AI Coach ช่วง Buy Phase
                   </p>
-                  <p className="mt-1 text-xs text-[#64748B]">
-                    ระบบจะปรับจุดยืนบนแผนที่ 2D และสรุปคำสั่งแก้เกม 3 ข้อให้ทันที
+                  <p className="mt-1 text-xs leading-relaxed text-[#64748B]">
+                    กด Tag ด่วนหรือเล่าสถานการณ์ตรงกลาง แล้วกด &ldquo;ขอคำสั่งแก้เกม&rdquo; เพื่อรับคำสั่งแยกตาม Agent และอัปเดตจุดยืนบนแผนที่ 2D
                   </p>
                 </div>
               )}
@@ -1139,7 +1487,7 @@ export function LiveMatchView({
               </div>
 
               {enemyCounters.length === 0 ? (
-                <div className="flex min-h-[180px] flex-col items-center justify-center border border-dashed border-[#263145] bg-[#0B0E14]/60 p-4 text-center">
+                <div className="flex min-h-[200px] flex-col items-center justify-center border border-dashed border-[#263145] bg-[#0B0E14]/60 p-4 text-center">
                   <p className="text-sm font-semibold text-[#CBD5E1]">
                     ยังไม่ได้เลือกตัวละครศัตรู
                   </p>
@@ -1172,7 +1520,7 @@ export function LiveMatchView({
         </section>
       </div>
 
-      {/* Fast Agent Picker Modal (Zero-Clipping across all 10 team slots) */}
+      {/* Fast Agent Picker Modal */}
       {pickingSlot && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"

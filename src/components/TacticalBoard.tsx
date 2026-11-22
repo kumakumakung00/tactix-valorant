@@ -33,6 +33,7 @@ import {
   BoardMarker,
   DrawingTool,
   MapCallout,
+  PendingAbilityPlace,
   RouteStroke,
   Side,
   StrategyPlay,
@@ -49,6 +50,7 @@ interface TacticalBoardProps {
   activePlay: StrategyPlay;
   showCallouts: boolean;
   pendingAgentPlace: { agentId: string; team: 'our' | 'enemy' } | null;
+  pendingAbilityPlace?: PendingAbilityPlace | null;
   canUndo: boolean;
   canRedo: boolean;
   onMapChange: (mapId: string) => void;
@@ -62,6 +64,8 @@ interface TacticalBoardProps {
   onRedo: () => void;
   onToggleCallouts: () => void;
   onCancelPendingAgent: () => void;
+  onCancelPendingAbility?: () => void;
+  teamLineupSlot?: React.ReactNode;
   isBoardFullscreen?: boolean;
   onToggleBoardFullscreen?: () => void;
 }
@@ -108,6 +112,7 @@ export function TacticalBoard({
   activePlay,
   showCallouts,
   pendingAgentPlace,
+  pendingAbilityPlace = null,
   canUndo,
   canRedo,
   onMapChange,
@@ -121,6 +126,8 @@ export function TacticalBoard({
   onRedo,
   onToggleCallouts,
   onCancelPendingAgent,
+  onCancelPendingAbility,
+  teamLineupSlot,
   isBoardFullscreen = false,
   onToggleBoardFullscreen,
 }: TacticalBoardProps) {
@@ -268,11 +275,18 @@ export function TacticalBoard({
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
 
       if (e.key === 'Escape') {
-        if (draftRoute.length > 0 || draftFreehand || selectedMarkerId || pendingAgentPlace) {
+        if (
+          draftRoute.length > 0 ||
+          draftFreehand ||
+          selectedMarkerId ||
+          pendingAgentPlace ||
+          pendingAbilityPlace
+        ) {
           setDraftRoute([]);
           setDraftFreehand(null);
           setSelectedMarkerId(null);
           onCancelPendingAgent();
+          onCancelPendingAbility?.();
         } else if (isBoardFullscreen && onToggleBoardFullscreen) {
           onToggleBoardFullscreen();
         }
@@ -299,11 +313,13 @@ export function TacticalBoard({
     draftFreehand,
     draftRoute,
     isBoardFullscreen,
+    onCancelPendingAbility,
     onCancelPendingAgent,
     onRedo,
     onToggleBoardFullscreen,
     onUndo,
     onUpdateElements,
+    pendingAbilityPlace,
     pendingAgentPlace,
     selectedMarkerId,
   ]);
@@ -336,6 +352,29 @@ export function TacticalBoard({
       });
       onCancelPendingAgent();
       setSelectedMarkerId(newMarker.id);
+      return;
+    }
+
+    // Pending ability placement mode from Team Lineup
+    if (pendingAbilityPlace) {
+      const newMarker: BoardMarker = {
+        id: uid(pendingAbilityPlace.kind),
+        kind: pendingAbilityPlace.kind,
+        x: pt.x,
+        y: pt.y,
+        agentId: pendingAbilityPlace.agentId,
+        team: 'our',
+        abilityName: pendingAbilityPlace.abilityName,
+        abilityIcon: pendingAbilityPlace.abilityIcon,
+        label: pendingAbilityPlace.abilityName,
+      };
+      onUpdateElements({
+        ...activePlay.elements,
+        markers: [...activePlay.elements.markers, newMarker],
+      });
+      onCancelPendingAbility?.();
+      setSelectedMarkerId(newMarker.id);
+      setPinLabelDraft(newMarker.label ?? '');
       return;
     }
 
@@ -721,6 +760,9 @@ export function TacticalBoard({
         </div>
       </div>
 
+      {/* Compact 5-Agent Team Lineup & Selected Skills Bar */}
+      {teamLineupSlot}
+
       {/* Playbook Selector Strip */}
       <div
         onWheel={(e) => {
@@ -790,7 +832,7 @@ export function TacticalBoard({
       <div className="no-scrollbar flex items-center gap-1 overflow-x-auto border-b border-[#263145] bg-[#111620] px-2.5 py-1">
         {TOOL_BUTTONS.map((btn) => {
           const Icon = btn.icon;
-          const active = tool === btn.id && !panMode && !pendingAgentPlace;
+          const active = tool === btn.id && !panMode && !pendingAgentPlace && !pendingAbilityPlace;
           return (
             <button
               key={btn.id}
@@ -800,6 +842,7 @@ export function TacticalBoard({
                 setTool(btn.id);
                 setPanMode(false);
                 onCancelPendingAgent();
+                onCancelPendingAbility?.();
                 if (btn.id !== 'route') setDraftRoute([]);
               }}
               className={`flex shrink-0 items-center gap-1 border px-2 py-1 text-[11px] font-medium transition-colors whitespace-nowrap ${
@@ -966,7 +1009,7 @@ export function TacticalBoard({
       </div>
 
       {/* Contextual Action Hints */}
-      {(pendingAgentPlace || tool === 'route' || selectedMarker) && (
+      {(pendingAgentPlace || pendingAbilityPlace || tool === 'route' || selectedMarker) && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#263145] bg-[#171E2B] px-4 py-1.5 text-xs">
           {pendingAgentPlace ? (
             <div className="flex items-center gap-2 text-[#22D3EE]">
@@ -980,6 +1023,31 @@ export function TacticalBoard({
               <button
                 type="button"
                 onClick={onCancelPendingAgent}
+                className="border border-[#263145] bg-[#111620] px-2 py-0.5 text-[11px] text-[#CBD5E1] hover:text-white"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          ) : pendingAbilityPlace ? (
+            <div className="flex items-center gap-2 text-[#22D3EE]">
+              {pendingAbilityPlace.abilityIcon && (
+                <img
+                  src={pendingAbilityPlace.abilityIcon}
+                  alt={pendingAbilityPlace.abilityName}
+                  referrerPolicy="no-referrer"
+                  className="h-4 w-4 object-contain"
+                />
+              )}
+              <span>
+                คลิกบนแผนที่เพื่อวางสกิล{' '}
+                <strong className="font-semibold text-[#F1F5F9]">
+                  [{pendingAbilityPlace.abilitySlot}] {pendingAbilityPlace.abilityName}
+                </strong>{' '}
+                ({pendingAbilityPlace.agentName})
+              </span>
+              <button
+                type="button"
+                onClick={() => onCancelPendingAbility?.()}
                 className="border border-[#263145] bg-[#111620] px-2 py-0.5 text-[11px] text-[#CBD5E1] hover:text-white"
               >
                 ยกเลิก
@@ -1062,7 +1130,12 @@ export function TacticalBoard({
         onDoubleClick={handleDoubleClickBoard}
         className="relative flex min-h-0 flex-1 touch-none select-none items-center justify-center overflow-hidden bg-[#0B0E14]"
         style={{
-          cursor: panMode || isPanning ? 'grab' : tool === 'select' && !pendingAgentPlace ? 'default' : 'crosshair',
+          cursor:
+            panMode || isPanning
+              ? 'grab'
+              : tool === 'select' && !pendingAgentPlace && !pendingAbilityPlace
+              ? 'default'
+              : 'crosshair',
         }}
       >
         {/* Full-bleed Map Splash Artwork Backdrop Filling Side Zones */}
@@ -1510,7 +1583,16 @@ export function TacticalBoard({
                         isSel ? 'ring-2 ring-white' : ''
                       }`}
                     >
-                      <Icon className={`h-3.5 w-3.5 ${cfg.color}`} />
+                      {m.abilityIcon ? (
+                        <img
+                          src={m.abilityIcon}
+                          alt={m.abilityName ?? m.label ?? m.kind}
+                          referrerPolicy="no-referrer"
+                          className="h-4 w-4 object-contain pointer-events-none"
+                        />
+                      ) : (
+                        <Icon className={`h-3.5 w-3.5 ${cfg.color}`} />
+                      )}
                     </div>
                     {m.label && (
                       <span className="mt-0.5 whitespace-nowrap border border-[#263145] bg-[#0B0E14]/90 px-1 py-0 text-[9px] font-medium text-[#F1F5F9]">

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AgentsRosterView } from './components/AgentsRosterView';
 import { ExportModal } from './components/ExportModal';
 import { Header } from './components/Header';
 import { LiveMatchState, LiveMatchView } from './components/LiveMatchView';
@@ -8,7 +7,7 @@ import { CrosshairsView } from './components/CrosshairsView';
 import { ProTrainingView } from './components/ProTrainingView';
 import { StrategyPanel } from './components/StrategyPanel';
 import { TacticalBoard } from './components/TacticalBoard';
-import { TeamSidebar } from './components/TeamSidebar';
+import { TeamLineupBar } from './components/TeamLineupBar';
 import {
   FALLBACK_AGENTS,
   FALLBACK_MAPS,
@@ -16,11 +15,13 @@ import {
   buildPlayFromPreset,
 } from './data/valorantFallback';
 import { getCompsForMapAndPlay } from './data/mapComps';
+import { PRO_PLAYBOOKS } from './data/proPlaybooks';
 import { fetchValorantAssets } from './services/valorantApi';
 import {
   Agent,
   AppView,
   BoardElements,
+  PendingAbilityPlace,
   Side,
   StrategyPlay,
   TactixPersistedState,
@@ -62,13 +63,6 @@ function updateTeamSlot(
   const next = team.map((id) => (agentId !== null && id === agentId ? null : id));
   next[slotIndex] = agentId;
   return next;
-}
-
-function addAgentToFirstFreeSlot(team: (string | null)[], agentId: string): (string | null)[] {
-  if (team.includes(agentId)) return team;
-  const freeIdx = team.findIndex((id) => id === null);
-  const targetIdx = freeIdx !== -1 ? freeIdx : 4;
-  return updateTeamSlot(team, targetIdx, agentId);
 }
 
 export default function App() {
@@ -138,7 +132,7 @@ export default function App() {
   }, [liveMatchState]);
 
   const [activeView, setActiveView] = useState<AppView>('board');
-  const [mobilePanel, setMobilePanel] = useState<'team' | 'board' | 'notes'>('board');
+  const [mobilePanel, setMobilePanel] = useState<'board' | 'notes'>('board');
   const [exportOpen, setExportOpen] = useState(false);
   const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
   const [isBoardFullscreen, setIsBoardFullscreen] = useState(false);
@@ -146,6 +140,8 @@ export default function App() {
     agentId: string;
     team: 'our' | 'enemy';
   } | null>(null);
+  const [pendingAbilityPlace, setPendingAbilityPlace] = useState<PendingAbilityPlace | null>(null);
+  const [activeProPlaybookId, setActiveProPlaybookId] = useState<string | null>(null);
 
   // Undo / Redo stacks for canvas drawing elements
   const [historyPast, setHistoryPast] = useState<BoardElements[]>([]);
@@ -428,16 +424,15 @@ export default function App() {
       {activeView === 'board' && (
         <>
           {/* Mobile / Tablet Panel Switcher */}
-          <div className="grid grid-cols-3 border-b border-[#263145] bg-[#111620] lg:hidden">
+          <div className="grid grid-cols-2 border-b border-[#263145] bg-[#111620] lg:hidden">
             {[
-              { id: 'team', label: 'ทีม 5v5' },
-              { id: 'board', label: 'กระดานแผนที่' },
+              { id: 'board', label: 'กระดานแผนที่ & Team Lineup' },
               { id: 'notes', label: 'กลยุทธ์และโน้ต' },
             ].map((tab) => (
               <button
                 key={tab.id}
                 type="button"
-                onClick={() => setMobilePanel(tab.id as 'team' | 'board' | 'notes')}
+                onClick={() => setMobilePanel(tab.id as 'board' | 'notes')}
                 className={`py-2.5 text-xs font-semibold transition-colors ${
                   mobilePanel === tab.id
                     ? 'border-b-2 border-[#FF4655] bg-[#171E2B] text-[#F1F5F9]'
@@ -449,63 +444,8 @@ export default function App() {
             ))}
           </div>
 
-          {/* 3-Column Tactical Command Workspace */}
-          <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-[248px_minmax(0,1fr)_310px] xl:grid-cols-[264px_minmax(0,1fr)_328px]">
-            <div className={`${mobilePanel === 'team' ? 'flex' : 'hidden'} min-h-0 flex-col lg:flex`}>
-              <TeamSidebar
-                agents={agents}
-                activeMap={activeMap}
-                activePlay={activePlay}
-                side={state.side}
-                ourTeam={state.ourTeam}
-                enemyTeam={state.enemyTeam}
-                pendingAgentPlace={pendingAgentPlace}
-                onPickOur={(slot, id) =>
-                  setState((prev) => ({
-                    ...prev,
-                    ourTeam: updateTeamSlot(prev.ourTeam, slot, id),
-                  }))
-                }
-                onPickEnemy={(slot, id) =>
-                  setState((prev) => ({
-                    ...prev,
-                    enemyTeam: updateTeamSlot(prev.enemyTeam, slot, id),
-                  }))
-                }
-                onApplyOurComp={(agentIds, agentDuties) => {
-                  const nextTeam = [0, 1, 2, 3, 4].map((idx) => agentIds[idx] ?? null);
-                  setState((prev) => ({
-                    ...prev,
-                    ourTeam: nextTeam,
-                  }));
-                  if (agentDuties) {
-                    const nextAssignments: Record<string, string> = {};
-                    nextTeam.forEach((agId, idx) => {
-                      if (agId && agentDuties[agId]) {
-                        nextAssignments[String(idx)] = agentDuties[agId];
-                      }
-                    });
-                    savePlayUpdate({
-                      ...activePlay,
-                      assignments: nextAssignments,
-                      updatedAt: Date.now(),
-                    });
-                  }
-                }}
-                onResetTeams={() =>
-                  setState((prev) => ({
-                    ...prev,
-                    ourTeam: EMPTY_TEAM(),
-                    enemyTeam: EMPTY_TEAM(),
-                  }))
-                }
-                onRequestPlaceAgent={(agentId, team) => {
-                  setPendingAgentPlace({ agentId, team });
-                  setMobilePanel('board');
-                }}
-              />
-            </div>
-
+          {/* 2-Column Expanded Tactical Command Workspace (Left Sidebar Removed) */}
+          <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_304px] xl:grid-cols-[minmax(0,1fr)_320px]">
             <div
               className={
                 isBoardFullscreen
@@ -522,16 +462,19 @@ export default function App() {
                 activePlay={activePlay}
                 showCallouts={state.showCallouts}
                 pendingAgentPlace={pendingAgentPlace}
+                pendingAbilityPlace={pendingAbilityPlace}
                 canUndo={historyPast.length > 0}
                 canRedo={historyFuture.length > 0}
                 isBoardFullscreen={isBoardFullscreen}
                 onToggleBoardFullscreen={handleToggleBoardFullscreen}
                 onMapChange={(mapId) => {
                   setPendingAgentPlace(null);
+                  setPendingAbilityPlace(null);
                   setState((prev) => ({ ...prev, mapId }));
                 }}
                 onSideChange={(side: Side) => {
                   setPendingAgentPlace(null);
+                  setPendingAbilityPlace(null);
                   setState((prev) => ({ ...prev, side }));
                 }}
                 onSelectPlay={(playId) =>
@@ -550,6 +493,100 @@ export default function App() {
                   setState((prev) => ({ ...prev, showCallouts: !prev.showCallouts }))
                 }
                 onCancelPendingAgent={() => setPendingAgentPlace(null)}
+                onCancelPendingAbility={() => setPendingAbilityPlace(null)}
+                teamLineupSlot={
+                  <TeamLineupBar
+                    agents={agents}
+                    activeMap={activeMap}
+                    activePlay={activePlay}
+                    side={state.side}
+                    ourTeam={state.ourTeam}
+                    enemyTeam={state.enemyTeam}
+                    pendingAgentPlace={pendingAgentPlace}
+                    pendingAbilityPlace={pendingAbilityPlace}
+                    activeProPlaybookId={activeProPlaybookId}
+                    onApplyProPlaybook={(playbookId) => {
+                      const pb = PRO_PLAYBOOKS.find((p) => p.id === playbookId);
+                      if (!pb) return;
+                      setActiveProPlaybookId(playbookId);
+                      setState((prev) => {
+                        const nextSide = pb.side === 'both' ? prev.side : pb.side;
+                        const nextKey = `${pb.mapId}:${nextSide}`;
+                        return {
+                          ...prev,
+                          mapId: pb.mapId,
+                          side: nextSide,
+                          ourTeam: [...pb.agents],
+                          activePlayIdByKey: pb.presetSeedId
+                            ? { ...prev.activePlayIdByKey, [nextKey]: pb.presetSeedId }
+                            : prev.activePlayIdByKey,
+                        };
+                      });
+                    }}
+                    onPickOur={(slot, id) => {
+                      setPendingAbilityPlace(null);
+                      setState((prev) => ({
+                        ...prev,
+                        ourTeam: updateTeamSlot(prev.ourTeam, slot, id),
+                      }));
+                    }}
+                    onPickEnemy={(slot, id) =>
+                      setState((prev) => ({
+                        ...prev,
+                        enemyTeam: updateTeamSlot(prev.enemyTeam, slot, id),
+                      }))
+                    }
+                    onApplyOurComp={(agentIds, agentDuties) => {
+                      setPendingAbilityPlace(null);
+                      const nextTeam = [0, 1, 2, 3, 4].map((idx) => agentIds[idx] ?? null);
+                      setState((prev) => ({
+                        ...prev,
+                        ourTeam: nextTeam,
+                      }));
+                      if (agentDuties) {
+                        const nextAssignments: Record<string, string> = {};
+                        nextTeam.forEach((agId, idx) => {
+                          if (agId && agentDuties[agId]) {
+                            nextAssignments[String(idx)] = agentDuties[agId];
+                          }
+                        });
+                        savePlayUpdate({
+                          ...activePlay,
+                          assignments: nextAssignments,
+                          updatedAt: Date.now(),
+                        });
+                      }
+                    }}
+                    onResetTeams={() => {
+                      setPendingAgentPlace(null);
+                      setPendingAbilityPlace(null);
+                      setState((prev) => ({
+                        ...prev,
+                        ourTeam: EMPTY_TEAM(),
+                        enemyTeam: EMPTY_TEAM(),
+                      }));
+                    }}
+                    onRequestPlaceAgent={(agentId, team) => {
+                      setPendingAbilityPlace(null);
+                      setPendingAgentPlace((prev) =>
+                        prev?.agentId === agentId && prev.team === team
+                          ? null
+                          : { agentId, team }
+                      );
+                      setMobilePanel('board');
+                    }}
+                    onRequestPlaceAbility={(ability) => {
+                      setPendingAgentPlace(null);
+                      setPendingAbilityPlace((prev) =>
+                        prev?.agentId === ability.agentId &&
+                        prev.abilityName === ability.abilityName
+                          ? null
+                          : ability
+                      );
+                      setMobilePanel('board');
+                    }}
+                  />
+                }
               />
             </div>
 
@@ -577,28 +614,6 @@ export default function App() {
             boardOurTeam={state.ourTeam}
             onChangeMatchState={(updater) => setLiveMatchState((prev) => updater(prev))}
             onResetMatch={() => setLiveMatchState(INITIAL_LIVE_MATCH())}
-          />
-        </div>
-      )}
-
-      {activeView === 'agents' && (
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <AgentsRosterView
-            agents={agents}
-            ourTeam={state.ourTeam}
-            enemyTeam={state.enemyTeam}
-            onAddToOurTeam={(agentId) =>
-              setState((prev) => ({
-                ...prev,
-                ourTeam: addAgentToFirstFreeSlot(prev.ourTeam, agentId),
-              }))
-            }
-            onAddToEnemyTeam={(agentId) =>
-              setState((prev) => ({
-                ...prev,
-                enemyTeam: addAgentToFirstFreeSlot(prev.enemyTeam, agentId),
-              }))
-            }
           />
         </div>
       )}

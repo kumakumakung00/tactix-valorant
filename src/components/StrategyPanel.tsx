@@ -301,7 +301,7 @@ export function StrategyPanel({
 
         {pickedSlots.length === 0 ? (
           <p className="text-xs text-[#64748B]">
-            เลือกตัวละครในฝั่งทีมเราด้านซ้าย เพื่อกำหนดหน้าที่ในรอบนี้
+            เลือกตัวละครในช่อง Team Lineup ด้านบน เพื่อกำหนดหน้าที่ในรอบนี้
           </p>
         ) : (
           <div className="space-y-1.5">
