@@ -156,66 +156,58 @@ async function createApp() {
 
       const ourTeam = Array.isArray(body.ourTeam) ? body.ourTeam.slice(0, 5) : [];
       const enemyTeam = Array.isArray(body.enemyTeam) ? body.enemyTeam.slice(0, 5) : [];
-      const callouts = Array.isArray(body.callouts) ? body.callouts.slice(0, 60) : [];
-      const sites = Array.isArray(body.sites) ? body.sites : ['A', 'B'];
+      const callouts = Array.isArray(body.callouts) ? body.callouts.slice(0, 20) : [];
+      const sites = Array.isArray(body.sites) && body.sites.length > 0 ? body.sites : ['A', 'B'];
 
       const ai = getAiClient();
 
-      const ourTeamText =
+      const teamLine =
         ourTeam.length > 0
           ? ourTeam
               .map(
                 (a) =>
-                  `ช่อง ${a.slot}: ${a.name} (${a.role})${
-                    a.abilities?.length ? ` [สกิล: ${a.abilities.join(', ')}]` : ''
+                  `${a.slot}:${a.name}(${a.role})${
+                    a.abilities?.length ? `[${a.abilities.slice(0, 2).join(',')}]` : ''
                   }`
               )
-              .join('\n')
-          : 'ยังไม่ได้ระบุตัวละคร (ให้จัดคำสั่ง 5 บทบาทหลัก: Entry, Initiator, Controller, Sentinel, Flex)';
+              .join('|')
+          : '1:Entry|2:Initiator|3:Controller|4:Sentinel|5:Flex';
 
-      const enemyText =
-        enemyTeam.length > 0
-          ? enemyTeam.map((e) => `${e.name} (${e.role})`).join(', ')
-          : 'ไม่ระบุรายชื่อตัวศัตรู';
+      const enemyLine =
+        enemyTeam.length > 0 ? enemyTeam.map((e) => e.name).join(',') : '';
 
-      const calloutsText =
+      const calloutLine =
         callouts.length > 0
-          ? callouts.map((c) => `${c.key} (${c.group}): x=${c.x}, y=${c.y}`).join(' | ')
-          : 'ใช้พิกัดมาตรฐาน 0-100 โดยจุดเกิดฝั่งบุกอยู่ด้านล่าง (y≈85) จุดเกิดฝั่งรับอยู่ด้านบน (y≈15)';
+          ? callouts.map((c) => `${c.key}@${Math.round(c.x)},${Math.round(c.y)}`).join(';')
+          : 'Atk@50,85;Mid@50,50;Def@50,15';
 
       const prompt = [
-        `แผนที่: ${mapName} (Sites: ${sites.join(', ')})`,
-        `ฝั่งของเรา: ${side === 'attack' ? 'ฝั่งบุก (Attack)' : 'ฝั่งรับ (Defense)'}`,
-        `สถานะเงินรอบนี้: ${economy}`,
-        ``,
-        `รายชื่อ Agent ทีมเรา:`,
-        ourTeamText,
-        ``,
-        `รายชื่อ Agent ทีมศัตรู: ${enemyText}`,
-        ``,
-        `พิกัดจุด Callout จริงบนแผนที่ ${mapName} (ระบบ 0-100%):`,
-        calloutsText,
-        ``,
-        `สถานการณ์ที่ผู้เล่นแจ้งในช่วง Buy Phase:`,
-        tags.length > 0 ? `- Tag ปัญหาด่วน: ${tags.join(', ')}` : '',
-        situation ? `- รายละเอียดเพิ่มเติม: ${situation}` : '',
-        ``,
-        `ภารกิจ: ออกคำสั่งแก้เกมสำหรับรอบถัดไปแบบโค้ชทีมแข่ง Valorant ระดับโปร:`,
-        `1. ใช้ภาษาไทยสไตล์โค้ชทีมแข่ง/IGL ที่สั้น กระชับ อ่านจบใน 5 วินาทีในช่วง Buy Phase`,
-        `2. แยกคำสั่งชัดเจนตามรายชื่อ Agent ในทีมเราทุกคน (อ้างอิงสกิลจริงของตัวนั้นถ้ามี)`,
-        `3. กำหนดพิกัด x, y (0-100) อ้างอิงจากพิกัด Callout จริงของแผนที่ด้านบน เพื่อวางไอคอน Agent และจุดเดิน (moveToX, moveToY)`,
-        `4. กำหนดจุดวางสกิลสำคัญ 2-4 จุด (utilityPlacements: smoke/flash/recon/molly/wall) ด้วยพิกัด x, y ที่แม่นยำบนแผนที่`,
+        `${mapName}(${sites.join('/')}) ${side} ${economy}`,
+        `Team:${teamLine}`,
+        enemyLine ? `Enemy:${enemyLine}` : '',
+        `Spots:${calloutLine}`,
+        `Issue:${[...tags, situation].filter(Boolean).join(' / ')}`,
+        `JSON: short Thai coach commands per agent + moveToX/Y + 2-3 utilities.`,
       ]
         .filter(Boolean)
         .join('\n');
 
-      const response = await callGeminiWithRetry(ai, {
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          systemInstruction:
-            'คุณคือ Head Coach ทีม Valorant ระดับ VCT (โปรเพลเยอร์) ที่เชี่ยวชาญการแก้เกมสดช่วง Buy Phase 30 วินาที ตอบเป็น JSON ตาม schema อย่างเคร่งครัด คำสั่งต้องสั้น คม ปฏิบัติได้ทันที ใช้ชื่อ Agent และสกิลตรงตามทีมที่ส่งมา และใช้พิกัด X,Y จากตาราง Callout ที่แนบให้เพื่อให้หมุดบนแผนที่ 2D ตรงตำแหน่งจริงของด่าน',
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error('REQUEST_TIMEOUT'));
+        }, 60_000);
+      });
+
+      const response = await Promise.race([
+        callGeminiWithRetry(ai, {
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            systemInstruction:
+              'VCT Valorant Coach. Output strict compact JSON in Thai. Keep ultra-short: strategyName<=4 words, headline<=10 words, command<=10 words per agent using Spots X,Y (5-95), max 3 utilities.',
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -283,6 +275,10 @@ async function createApp() {
             required: ['strategyName', 'headline', 'agentOrders', 'utilityPlacements'],
           },
         },
+        }),
+        timeoutPromise,
+      ]).finally(() => {
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
       });
 
       const rawText = (response.text ?? '').trim();
@@ -403,6 +399,11 @@ async function createApp() {
         return res.status(404).json({
           error: 'ไม่พบโมเดล AI ที่ระบุบน Gemini API',
           detail: message,
+        });
+      }
+      if (message === 'REQUEST_TIMEOUT') {
+        return res.status(504).json({
+          error: 'หมดเวลาการเชื่อมต่อ Gemini API (เกิน 60 วินาที) — กรุณากดขอคำสั่งใหม่อีกครั้ง',
         });
       }
       if (status === 503 || message.includes('UNAVAILABLE') || message.includes('high demand')) {
